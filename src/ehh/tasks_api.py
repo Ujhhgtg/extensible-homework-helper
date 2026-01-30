@@ -102,12 +102,6 @@ def _get_headers(token: Token) -> Optional[dict[str, str]]:
 def get_hw_list(token: Token) -> Optional[list[HomeworkRecord]]:
     print("--- step: retrieve homework list ---")
 
-    if token.token_type != "bearer":
-        print(
-            f"<error> unsupported token type: {token.token_type}; supported type(s) are: bearer"
-        )
-        return None
-
     headers = _get_headers(token)
     if headers is None:
         print("<error> authorization failed")
@@ -568,7 +562,7 @@ def fill_in_answers(
     token: Token,
     record: HomeworkRecord,
     answers: list[dict],
-    expected_correct_rate: Optional[float] = None,
+    expected_correctness: Optional[float] = None,
 ) -> None:
     print(f"--- step: fill in answers for '{record.title}' ---")
 
@@ -593,11 +587,11 @@ def fill_in_answers(
         )
         return
 
-    if expected_correct_rate is not None:
+    if expected_correctness is not None:
         total_questions = len(questions)
         total_choices = sum(1 for a in answers if a["type"] == "choice")
-        expected_wrong_questions = int(total_questions * (1.0 - expected_correct_rate))
-        expected_wrong_choices = int(total_choices * (1.0 - expected_correct_rate))
+        expected_wrong_questions = int(total_questions * (1.0 - expected_correctness))
+        expected_wrong_choices = int(total_choices * (1.0 - expected_correctness))
         if total_choices < expected_wrong_questions:
             print(
                 f"<error> not enough choices ({total_choices}) to be wrong ({expected_wrong_questions})"
@@ -609,7 +603,7 @@ def fill_in_answers(
                 f"<info> questions: {total_questions}; choices: {total_choices}; expected wrong questions: {expected_wrong_questions}; expected wrong choices: {expected_wrong_choices}"
             )
             print(
-                f"<info> adjusting answers to achieve expected correctness rate of {expected_correct_rate*100:.2f}%..."
+                f"<info> adjusting answers to achieve expected correctness rate of {expected_correctness*100:.2f}%..."
             )
             wrong_answer_indices = sorted(
                 random.sample(
@@ -719,11 +713,8 @@ def get_paper_answers(token: Token, record: HomeworkRecord) -> Optional[list[dic
     for q in questions:
         answer_type = _get_answer_type(q["id"])
         answer_content = q["answer"]
-        if (
-            answer_type == "fill-in-blanks"
-            and len(answer_content) >= 2
-            and "/" in answer_content
-        ):
+
+        if answer_type == "fill-in-blanks" and "/" in answer_content:
             answer_content = answer_content.split("/")
 
         print(
@@ -733,8 +724,8 @@ def get_paper_answers(token: Token, record: HomeworkRecord) -> Optional[list[dic
             {
                 "index": q["index"],
                 "id": q["id"],
-                "type": _get_answer_type(q["id"]),
-                "content": q["answer"],
+                "type": answer_type,
+                "content": answer_content,
             }
         )
     return result

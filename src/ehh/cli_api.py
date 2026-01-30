@@ -39,9 +39,9 @@ def main():
         messenger=ConsoleMessenger(), http_client=httpx.Client(base_url=BASE_URL)
     )
 
-    print("--- english homework helper ---")
+    print("--- extensible homework helper ---")
     print("--- by: ujhhgtg ---")
-    print("--- github: https://github.com/Ujhhgtg/english-homework-helper ---")
+    print("--- github: https://github.com/Ujhhgtg/extensible-homework-helper ---")
 
     print("--- step: initialize ---")
     traceback.install()

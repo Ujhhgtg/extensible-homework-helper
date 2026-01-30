@@ -44,28 +44,11 @@ class ReplCompleter(Completer):
                 yield Completion(option, start_position=-len(current_word))
 
 
-class YesNoValidator(Validator):
-    def validate(self, document):
-        text = document.text.lower().strip()
-        yes_variations = ("y", "yes")
-        no_variations = ("n", "no")
-
-        if text in yes_variations:
-            document.text = "yes"  # type: ignore
-        elif text in no_variations:
-            document.text = "no"  # type: ignore
-        else:
-            raise ValidationError(
-                message="invalid input",
-                cursor_position=len(document.text),
-            )
-
-
 def prompt_for_yn(session: PromptSession, message: str) -> bool:
     while True:
-        response = session.prompt(message, validator=YesNoValidator())
+        response = session.prompt(message)
 
-        if response == "yes":
+        if "yes".startswith(response.lower()):
             return True
-        elif response == "no":
+        elif "no".startswith(response.lower()):
             return False

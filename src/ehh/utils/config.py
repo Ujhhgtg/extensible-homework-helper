@@ -2,7 +2,7 @@ from pathlib import Path
 
 import yaml
 import json5
-from munch import Munch, munchify
+from munch import Munch, munchify, unmunchify
 
 from .logging import print
 from .fs import CONFIG_DIR
@@ -25,7 +25,7 @@ def load_config(path: str | Path = CONFIG_FILE) -> Munch:
 
 def save_config(config: Munch, path: str | Path = CONFIG_FILE) -> None:
     with open(path, "wt", encoding="utf-8") as f:
-        f.write(yaml.dump(munchify(config), allow_unicode=True, indent=2))
+        f.write(yaml.dump(unmunchify(config), allow_unicode=True, indent=2))
 
 
 def migrate_config_if_needed() -> None:

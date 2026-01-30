@@ -2,7 +2,7 @@
 name = "ehh"
 version = "0.0.1"
 authors = [{ name = "Fey Xie", email = "feyxiexzf@gmail.com" }]
-description = "Utility for an english homework platform"
+description = "Utility for any homework platform"
 readme = "README.md"
 requires-python = ">=3.9"
 classifiers = [
@@ -16,6 +16,7 @@ dependencies = [
     "openai",
     "json5",
     "pyyaml",
+    "semver",
     "httpx",
     "httpx[socks]",
     "platformdirs",
@@ -33,5 +34,13 @@ transcription = ["openai-whisper"]
 clipboard = ["pyperclip"]
 
 [project.urls]
-Homepage = "https://github.com/Ujhhgtg/english-homework-helper"
-Issues = "https://github.com/Ujhhgtg/english-homework-helper/issues"
+Homepage = "https://github.com/Ujhhgtg/extensible-homework-helper"
+Issues = "https://github.com/Ujhhgtg/extensible-homework-helper/issues"
+
+[project.entry-points.ehh.adapters]
+easy_excercise_api = "ehh.adapters.impl.easy_exercise_api_adapter:EasyExcerciseApiAdapter"
+easy_excercise_browser = "ehh.adapters.impl.easy_exercise_browser_adapter:EasyExcerciseBrowserAdapter"
+
+[project.entry-points.ehh.mixins]
+audio_transcription = "ehh.mixins.impl.audio_transcription_mixin:AudioTranscriptionMixin"
+ai_answer_generation = "ehh.mixins.impl.ai_answer_generation_mixin:AIAnswerGenerationMixin"
