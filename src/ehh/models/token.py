@@ -6,7 +6,7 @@ from .user_info import UserInfo
 @dataclass
 class Token:
     access_token: str
-    token_type: str
+    type: str
     refresh_token: str
     expires_in: int
     scope: str

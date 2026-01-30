@@ -1,28 +1,43 @@
+import random
 import re
 import time
-import random
+from datetime import datetime
 from typing import Optional
 
 import json5
 import openai
 from bs4 import BeautifulSoup
 
-from .utils.api.constants import *
-from .utils.constants import (
-    GENERATE_ANSWERS_PROMPT,
-    GENERATE_ANSWERS_WITH_LISTENING_PROMPT,
-)
-from .utils.logging import print, download_file_with_progress, print_and_copy_path
-from .utils.crypto import get_md5_str_of_str, encodeb64_safe
-from .utils.fs import read_file_text, CACHE_DIR
-from .models.api.school_info import SchoolInfo
-from .models.api.token import Token
-from .models.api.user_info import UserInfo
+from ehh.models.homework_kind import HomeworkKind
+
+from . import globalvars
+from .models.ai_client import AIClient
+from .models.credentials import Credentials
 from .models.homework_record import HomeworkRecord
 from .models.homework_status import HomeworkStatus
-from .models.credentials import Credentials
-from .models.ai_client import AIClient
-from . import globalvars
+from .models.school_info import SchoolInfo
+from .models.token import Token
+from .models.user_info import UserInfo
+from .utils.constants import (
+    FIND_SCHOOLS_URL,
+    GENERATE_ANSWERS_PROMPT,
+    GENERATE_ANSWERS_WITH_LISTENING_PROMPT,
+    GENERATE_TRANSLATION_ANSWERS_PROMPT,
+    GET_HW_CONTENT_URL,
+    GET_HW_DETAILS_URL,
+    GET_HW_LIST_URL,
+    GET_TOKEN_URL,
+    GET_TRANSLATION_HW_CONTENT_URL,
+    GET_TRANSLATION_HW_LIST_URL,
+    LOAD_ANSWERS_CACHE_URL,
+    SAVE_ANSWERS_CACHE_URL,
+    START_HW_URL,
+    SUBMIT_ANSWERS_URL,
+    TIME_FORMAT,
+)
+from .utils.crypto import encodeb64_safe, get_md5_str_of_str
+from .utils.fs import CACHE_DIR, read_file_text
+from .utils.logging import download_file_with_progress, print, print_and_copy_path
 
 
 def _get_status_enum(status_int: int) -> HomeworkStatus:
@@ -72,7 +87,7 @@ def login(credentials: Credentials) -> Optional[Token]:
 
     return Token(
         access_token=data["access_token"],
-        token_type=data["token_type"],
+        type=data["token_type"],
         refresh_token=data["refresh_token"],
         expires_in=data["expires_in"],
         scope=data["scope"],
@@ -88,9 +103,9 @@ def login(credentials: Credentials) -> Optional[Token]:
 
 
 def _get_headers(token: Token) -> Optional[dict[str, str]]:
-    if token.token_type != "bearer":
+    if token.type != "bearer":
         print(
-            f"<error> unsupported token type: {token.token_type}; supported type(s) are: bearer"
+            f"<error> unsupported token kind: {token.type}; supported kind(s) are: bearer"
         )
         return None
 
@@ -99,27 +114,23 @@ def _get_headers(token: Token) -> Optional[dict[str, str]]:
     }
 
 
-def get_hw_list(token: Token) -> Optional[list[HomeworkRecord]]:
-    print("--- step: retrieve homework list ---")
+def _get_all_kind_hw_score(item: dict) -> int:
+    score = item.get("score", None)
+    if score is None:
+        score = item.get("ownerScore", None)
+    return score  # type: ignore
 
-    if token.token_type != "bearer":
-        print(
-            f"<error> unsupported token type: {token.token_type}; supported type(s) are: bearer"
-        )
-        return None
 
-    headers = _get_headers(token)
-    if headers is None:
-        print("<error> authorization failed")
-        return None
+def _get_kind_hw_list(
+    url: str, headers: dict[str, str], kind: HomeworkKind
+) -> list[HomeworkRecord]:
+    hw_list: list[HomeworkRecord] = []
 
     max_page_index = 0
     cur_page_index = 0
-    hw_list: list[HomeworkRecord] = []
-
     while cur_page_index <= max_page_index:
         response = globalvars.context.http_client.post(
-            GET_HW_LIST_URL,
+            url,
             headers=headers,
             json={"pageIndex": cur_page_index + 1, "pageSize": 50},
         )
@@ -130,34 +141,53 @@ def get_hw_list(token: Token) -> Optional[list[HomeworkRecord]]:
 
         max_page_index = data["data"]["pageCount"]
 
-        for item in data["data"]["userTasks"]:
-            title = item["taskTitle"]
-            status = _get_status_enum(int(item["status"]))
-            cur_score = item["score"]
-            tot_score = item["totalScore"]
-
+        for item in (
+            data["data"].get("userTasks", None) or data["data"].get("tasks", None) or []
+        ):
             hw_list.append(
                 HomeworkRecord(
                     api_id=item["id"],
-                    api_task_id=item["taskId"],
-                    api_task_paper_id=item["taskPaperId"],
-                    api_batch_id=item["batchId"],
-                    title=title,
-                    teacher_name=item["assignerName"],
-                    start_time=item["startTime"],
-                    end_time=item["completeTime"],
-                    publish_time=item["beginTime"],
-                    due_time=item["endTime"],
-                    current_score=cur_score,
-                    pass_score=0,  # idk which is pass score
-                    total_score=tot_score,
-                    is_pass=True,  # idk which is pass condition
-                    teacher_comment=None,  # idk which is teacher comment
-                    status=status,
+                    api_task_id=item.get("taskId", None),
+                    api_task_paper_id=item.get("taskPaperId", None),
+                    api_batch_id=item.get("batchId", None),
+                    title=item.get("taskTitle", None) or item.get("title", None),
+                    kind=kind,
+                    publisher_name=item["assignerName"],
+                    # start_time=item["startTime"],
+                    # end_time=item["completeTime"],
+                    publish_time=datetime.strptime(item["beginTime"], TIME_FORMAT),
+                    # due_time=item["endTime"],
+                    current_score=_get_all_kind_hw_score(item),
+                    # pass_score=0,  # idk which is pass score
+                    total_score=item["totalScore"],
+                    # is_pass=True,  # idk which is pass condition
+                    # teacher_comment=None,  # idk which is teacher comment
+                    status=_get_status_enum(int(item["status"])),
                 )
             )
 
         cur_page_index += 1
+
+    return hw_list
+
+
+def get_hw_list(token: Token) -> Optional[list[HomeworkRecord]]:
+    print("--- step: retrieve homework list ---")
+
+    headers = _get_headers(token)
+    if headers is None:
+        print("<error> authorization failed")
+        return None
+
+    hw_list: list[HomeworkRecord] = []
+
+    hw_list.extend(_get_kind_hw_list(GET_HW_LIST_URL, headers, HomeworkKind.QUESTIONS))
+    hw_list.extend(
+        _get_kind_hw_list(
+            GET_TRANSLATION_HW_LIST_URL, headers, HomeworkKind.TRANSLATION
+        )
+    )
+    hw_list.sort(key=lambda r: r.publish_time, reverse=True)
 
     return hw_list
 
@@ -234,7 +264,7 @@ def _get_hw_paper(token: Token, record: HomeworkRecord) -> Optional[dict]:
         return None
 
     response = globalvars.context.http_client.post(
-        GET_HW_PAPER_URL,
+        GET_HW_CONTENT_URL,
         headers=headers,
         json={"id": record.api_task_paper_id},
     )
@@ -306,7 +336,7 @@ def download_audio(token: Token, record: HomeworkRecord) -> None:
         )
         print_and_copy_path(path)
     except Exception as download_e:
-        print(f"<error> failed to download audio:")
+        print("<error> failed to download audio:")
         globalvars.context.messenger.send_exception(download_e)
         return
 
@@ -314,31 +344,56 @@ def download_audio(token: Token, record: HomeworkRecord) -> None:
 WHITESPACE_PATTERN = re.compile(r"[^\S\n]+")
 
 
-def get_text(token: Token, record: HomeworkRecord) -> Optional[str]:
+def get_text_content(token: Token, record: HomeworkRecord) -> Optional[str]:
     print(f"--- step: retrieve text content for '{record.title}' ---")
 
-    paper = _get_hw_paper(token, record)
-    if paper is None:
-        print("<error> failed to get homework paper")
-        return None
+    if record.kind == HomeworkKind.QUESTIONS:
+        paper = _get_hw_paper(token, record)
+        if paper is None:
+            print("<error> failed to get homework paper")
+            return None
 
-    soup = BeautifulSoup(paper["content"], "html.parser")
-    text_content = (
-        WHITESPACE_PATTERN.sub(" ", soup.get_text(separator="\n").strip())
-        .strip()
-        .replace("\n \n", "\n")
-        .replace("\n\n", "\n")
-    )
-    print(
-        f"<success> extracted text content for '{record.title}'; totaling {len(text_content)} chars in length"
-    )
-    return text_content
+        soup = BeautifulSoup(paper["content"], "html.parser")
+        text_content = (
+            WHITESPACE_PATTERN.sub(" ", soup.get_text(separator="\n").strip())
+            .strip()
+            .replace("\n \n", "\n")
+            .replace("\n\n", "\n")
+        )
+        print(
+            f"<success> extracted text content for '{record.title}'; totaling {len(text_content)} chars in length"
+        )
+        return text_content
+
+    elif record.kind == HomeworkKind.TRANSLATION:
+        headers = _get_headers(token)
+        if headers is None:
+            print("<error> authorization failed")
+            return None
+
+        response = globalvars.context.http_client.post(
+            GET_TRANSLATION_HW_CONTENT_URL,
+            headers=headers,
+            json={"id": record.api_id},
+        )
+
+        data = response.json()
+        if data.get("success", False) is False:
+            print(f"<error> failed to get homework text content: {data}")
+            return None
+
+        return "\n".join(
+            map(
+                lambda e: f"{e['questionNumber']}. {e['question']}",
+                data["data"],
+            )
+        )
 
 
-def download_text(token: Token, record: HomeworkRecord) -> None:
+def download_text_content(token: Token, record: HomeworkRecord) -> None:
     print(f"--- step: download text content for '{record.title}' ---")
 
-    text_content = get_text(token, record)
+    text_content = get_text_content(token, record)
     if text_content is None:
         print("<error> failed to get text content")
         return
@@ -382,13 +437,13 @@ def transcribe_audio(record: HomeworkRecord):
         import whisper
     except ImportError:
         print(
-            "<error> openai-whisper not installed; please install the 'transcription' extra requirement"
+            "<error> whisper not installed; install the 'transcription' extra requirement"
         )
         return
 
     if globalvars.context.whisper_model is None:
         print(
-            f"<info> loading Whisper model{" into memory" if globalvars.context.config.whisper.in_memory else ""} (this may take a while)..."
+            f"<info> loading Whisper model{' into memory' if globalvars.context.config.whisper.in_memory else ''} (this may take a while)..."
         )
         whisper_device = None
         if globalvars.context.config.whisper.device == "cuda":
@@ -416,7 +471,7 @@ def transcribe_audio(record: HomeworkRecord):
     print(f"<info> transcription completed in {end - start:.2f} seconds")
     transcription = result.get("text", None)
     if transcription is None or (transcription is str and transcription.strip() == ""):
-        print(f"<error> transcription failed or returned empty result")
+        print("<error> transcription failed or returned empty result")
         return
 
     transcription_file = f"{path}.txt"
@@ -442,16 +497,19 @@ def generate_answers(
 ) -> Optional[list[dict]]:
     print(f"--- step: generate answers for '{record.title}' ---")
 
-    if token is None:
-        if has_audio_manual is not None:
-            has_audio = has_audio_manual
+    if record.kind == HomeworkKind.QUESTIONS:
+        if token is None:
+            if has_audio_manual is not None:
+                has_audio = has_audio_manual
+            else:
+                print(
+                    "<error> not logged in; could not determine whether hw item has listening"
+                )
+                return None
         else:
-            print(
-                "<error> not logged in; could not determine whether hw item has listening"
-            )
-            return None
+            has_audio = _get_audio_url(token, record)
     else:
-        has_audio = _get_audio_url(token, record)
+        has_audio = False
 
     transcription_file = (
         CACHE_DIR / f"homework_{encodeb64_safe(record.title)}_audio.mp3.txt"
@@ -474,10 +532,16 @@ def generate_answers(
         prompt = GENERATE_ANSWERS_WITH_LISTENING_PROMPT.replace(
             "{transcription}", read_file_text(transcription_file)
         ).replace("{questions}", read_file_text(text_file))
-    else:
+    elif record.kind == HomeworkKind.QUESTIONS:
         prompt = GENERATE_ANSWERS_PROMPT.replace(
             "{questions}", read_file_text(text_file)
         )
+    elif record.kind == HomeworkKind.TRANSLATION:
+        prompt = GENERATE_TRANSLATION_ANSWERS_PROMPT.replace(
+            "{questions}", read_file_text(text_file)
+        )
+    else:
+        raise NotImplementedError()
 
     print(f"<info> current AI client: {client.describe()}")
     print("<info> requesting model for a response (this may take a while)...")
@@ -499,16 +563,6 @@ def generate_answers(
         )
     except openai.APIError as e:
         print(f"<error> api returned error: {e}")
-        if (
-            e.body is not None
-            and e.body.get("error", None)
-            and e.body["error"].get("message", None)
-        ):
-            if (
-                e.body["error"]["message"]
-                == "User location is not supported for the API use."
-            ):
-                print("<tip> try changing your proxy endpoint to a different location")
         return None
 
     raw_data = response.choices[0].message.content
@@ -524,27 +578,31 @@ def generate_answers(
 
         print("<info> post-processing model result...")
         post_process_count = 0
-        for answer in answers:
-            if len(answer["content"]) >= 2:
-                if answer["type"] != "fill-in-blanks":
-                    post_process_count += 1
-                    answer["type"] = "fill-in-blanks"
-                else:
-                    if "/" in answer["content"]:
+        if record.kind == HomeworkKind.QUESTIONS:
+            for answer in answers:
+                if len(answer["content"]) >= 2:
+                    if answer["kind"] != "fill-in-blanks":
                         post_process_count += 1
-                        answer["content"] = answer["content"].split("/")
-            elif "A" <= answer["content"].upper() <= "D":
-                post_process_count += 1
-                answer["type"] = "choice|fill-in-blanks"
-            elif "E" <= answer["content"].upper() <= "Z":
-                post_process_count += 1
-                answer["type"] = "fill-in-blanks"
+                        answer["kind"] = "fill-in-blanks"
+                    else:
+                        if "/" in answer["content"]:
+                            post_process_count += 1
+                            answer["content"] = answer["content"].split("/")
+                elif "A" <= answer["content"].upper() <= "D":
+                    post_process_count += 1
+                    answer["kind"] = "choice|fill-in-blanks"
+                elif "E" <= answer["content"].upper() <= "Z":
+                    post_process_count += 1
+                    answer["kind"] = "fill-in-blanks"
+        elif record.kind == HomeworkKind.TRANSLATION:
+            for answer in answers:
+                answer["kind"] = "translation"
 
         print(f"<info> post-processed model result for {post_process_count} times")
         return answers
 
     except ValueError:
-        print(f"<error> model result is not valid json")
+        print("<error> model result is not valid json")
         return None
 
 
@@ -595,26 +653,25 @@ def fill_in_answers(
 
     if expected_correct_rate is not None:
         total_questions = len(questions)
-        total_choices = sum(1 for a in answers if a["type"] == "choice")
+        total_choices = sum(1 for a in answers if a["kind"] == "choice")
         expected_wrong_questions = int(total_questions * (1.0 - expected_correct_rate))
-        expected_wrong_choices = int(total_choices * (1.0 - expected_correct_rate))
         if total_choices < expected_wrong_questions:
             print(
                 f"<error> not enough choices ({total_choices}) to be wrong ({expected_wrong_questions})"
             )
             return
 
-        if expected_wrong_choices > 0:
+        if expected_wrong_questions > 0:
             print(
-                f"<info> questions: {total_questions}; choices: {total_choices}; expected wrong questions: {expected_wrong_questions}; expected wrong choices: {expected_wrong_choices}"
+                f"<info> questions: {total_questions}; choices: {total_choices}; expected wrong questions/choices: {expected_wrong_questions}"
             )
             print(
-                f"<info> adjusting answers to achieve expected correctness rate of {expected_correct_rate*100:.2f}%..."
+                f"<info> adjusting answers to achieve expected correctness rate of {expected_correct_rate * 100:.2f}%..."
             )
             wrong_answer_indices = sorted(
                 random.sample(
-                    [i for i, a in enumerate(answers) if a["type"] == "choice"],
-                    expected_wrong_choices,
+                    [i for i, a in enumerate(answers) if a["kind"] == "choice"],
+                    expected_wrong_questions,
                 )
             )
             print(
@@ -623,7 +680,7 @@ def fill_in_answers(
             for i in wrong_answer_indices:
                 q = questions[i]
                 a = answers[i]
-                if a["type"] == "choice" and expected_wrong_choices > 0:
+                if a["kind"] == "choice" and expected_wrong_questions > 0:
                     original_answer = a["content"].upper()
                     wrong_option = random.choice(
                         [opt for opt in ["A", "B", "C", "D"] if opt != original_answer]
@@ -727,7 +784,7 @@ def get_paper_answers(token: Token, record: HomeworkRecord) -> Optional[list[dic
             answer_content = answer_content.split("/")
 
         print(
-            f"<info> extracted answer {q["index"]}: Type='{answer_type}', Content='{answer_content}'"
+            f"<info> extracted answer {q['index']}: Type='{answer_type}', Content='{answer_content}'"
         )
         result.append(
             {
@@ -791,16 +848,22 @@ def print_hw_list(hw_list: list[HomeworkRecord]) -> None:
         show_header=True,
         columns=[
             ("Index", "cyan", "right"),
+            ("Publish Time", "white", "center"),
             ("Title", "magenta", "left"),
             ("Status", "yellow"),
+            ("Publisher", "green", "center"),
+            ("Kind", "blue", "center"),
             ("Score", "red", "center"),
         ],
         rows=list(
             map(
                 lambda enum_obj: (
                     str(enum_obj[0]),
+                    enum_obj[1].publish_time.strftime(TIME_FORMAT),
                     enum_obj[1].title,
-                    f"{enum_obj[1].status} ({enum_obj[1].status.value[1]})",  # type: ignore
+                    enum_obj[1].status.value[1],  # type: ignore
+                    enum_obj[1].publisher_name,
+                    enum_obj[1].kind.value,
                     f"{enum_obj[1].current_score}/{enum_obj[1].total_score}",
                 ),
                 enumerate(hw_list),

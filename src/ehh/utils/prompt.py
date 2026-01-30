@@ -1,6 +1,5 @@
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
-from prompt_toolkit.validation import Validator, ValidationError
 from prompt_toolkit.document import Document
 
 
@@ -44,28 +43,14 @@ class ReplCompleter(Completer):
                 yield Completion(option, start_position=-len(current_word))
 
 
-class YesNoValidator(Validator):
-    def validate(self, document):
-        text = document.text.lower().strip()
-        yes_variations = ("y", "yes")
-        no_variations = ("n", "no")
-
-        if text in yes_variations:
-            document.text = "yes"  # type: ignore
-        elif text in no_variations:
-            document.text = "no"  # type: ignore
-        else:
-            raise ValidationError(
-                message="invalid input",
-                cursor_position=len(document.text),
-            )
-
-
 def prompt_for_yn(session: PromptSession, message: str) -> bool:
     while True:
-        response = session.prompt(message, validator=YesNoValidator())
+        response = session.prompt(message)
+        text = response.lower().strip()
+        yes_variants = ("y", "yes")
+        no_variants = ("n", "no")
 
-        if response == "yes":
+        if text in yes_variants:
             return True
-        elif response == "no":
+        elif text in no_variants:
             return False

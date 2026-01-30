@@ -1,0 +1,22 @@
+ai_client:
+  all:
+    - api_key: ollama
+      api_url: http://localhost:11434/v1/
+      kind: openai
+      model:
+        all:
+          - qwen3:30b
+          - qwen3-coder:30b
+        selected: 0
+  selected: 0
+credentials:
+  all:
+    - password: password
+      school: school
+      username: username
+  selected: 0
+telegram_bot_token: token
+whisper:
+  device: auto
+  in_memory: false
+  model: large

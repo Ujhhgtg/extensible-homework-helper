@@ -1,18 +1,5 @@
-WHISPER: bool = True
-PYPERCLIP: bool = True
-SELENIUM: bool = True
+from importlib.util import find_spec
 
-try:
-    import whisper  # type: ignore
-except ImportError:
-    WHISPER = False
-
-try:
-    import pyperclip  # type: ignore
-except ImportError:
-    PYPERCLIP = False
-
-try:
-    import selenium  # type: ignore
-except ImportError:
-    SELENIUM = False
+WHISPER: bool = find_spec("whisper") is not None
+SELENIUM: bool = find_spec("selenium") is not None
+TEXTUAL: bool = find_spec("textual") is not None

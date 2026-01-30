@@ -2,15 +2,15 @@
 name = "ehh"
 version = "0.0.1"
 authors = [{ name = "Fey Xie", email = "feyxiexzf@gmail.com" }]
-description = "Utility for an english homework platform"
+description = "Utility for many homework platforms"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.12"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
 license = "GPL-3.0-or-later"
-license-files = ["LICEN[CS]E*"]
+license-files = ["LICENSE"]
 dependencies = [
     "munch",
     "openai",
@@ -19,19 +19,16 @@ dependencies = [
     "httpx",
     "httpx[socks]",
     "platformdirs",
-    "prompt_toolkit>=3,<4",
-    "rich>=14,<15",
+    "prompt_toolkit>=3",
+    "rich>=14",
     "beautifulsoup4",
+    "pyperclip",
 ]
 
 [project.optional-dependencies]
-cli-browser = ["selenium>=4,<5"]
-tui = ["textual>=6,<7"]
-dev = ["textual-dev"]
 tg-bot = ["python-telegram-bot"]
-transcription = ["openai-whisper"]
-clipboard = ["pyperclip"]
+transcription = ["openai-whisper", "torch", "torchvision"]
 
 [project.urls]
-Homepage = "https://github.com/Ujhhgtg/english-homework-helper"
-Issues = "https://github.com/Ujhhgtg/english-homework-helper/issues"
+Homepage = "https://github.com/Ujhhgtg/extensible-homework-helper"
+Issues = "https://github.com/Ujhhgtg/extensible-homework-helper/issues"

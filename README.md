@@ -1,6 +1,6 @@
-# 📚 English Homework Helper
+# 📚 Extensible Homework Helper
 
-A powerful command-line tool designed to automate login, homework list parsing, and content extraction (including audio downloading and transcription) from the [简练英语平台](https://admin.jeedu.net) platform using Selenium or httpx & BeautifulSoup and OpenAI's Whisper.
+A powerful command-line tool designed to automate login, homework list parsing, and content extraction (including audio downloading and transcription) from the [简练英语平台](https://admin.jeedu.net) platform using httpx & BeautifulSoup and OpenAI's Whisper.
 
 ## ✨ Features
 
@@ -14,7 +14,7 @@ A powerful command-line tool designed to automate login, homework list parsing, 
 
 - AI-Powered Answers: Generates potential answers using any OpenAI-compatible LLM to assist with your assignments.
 
-- Interactive Interface: Provides a dynamic, user-friendly command-line interface powered by `prompt-toolkit`.
+- Interactive Interface: Provides a dynamic, user-friendly command-line interface powered by `prompt_toolkit`.
 
 - 2 Operation Modes: Browser automation-based (using Selenium) and API-based (using httpx & BeautifulSoup)
 
@@ -22,43 +22,32 @@ A powerful command-line tool designed to automate login, homework list parsing, 
 
 ### Prerequisites
 
-You need to have Python 3.9+ installed on your system. If you prefer the browser version, you also need a browser (Edge, Chrome, Firefox or Safari) installed.
+You need to have Python 3.12+ installed on your system.
 
-### 1. [Optional] Install PyTorch
+### 1. Install package
 
-```bash
-# Install PyTorch for GPU-accelerated Whisper audio transcription (highly recommended)
-# Choose the correct command based on your device/CUDA version (skip to fallback to CPU)
-# CUDA 12.6
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
-# CUDA 12.8 (Common for many systems)
-pip install torch torchvision
-# CUDA 13.0
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu129
-# ROCm 6.4 (For some AMD GPUs)
-pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm6.4
-```
-
-### 2. Install package
-
-#### A. From source, with pip
+#### A. From source, with uv
 
 ```bash
-pip install git+https://github.com/Ujhhgtg/english-homework-helper.git
-
-# install optional dependencies for more features
-# refer to pyproject.toml for now
-pip install "ehh[transcription] @ git+https://github.com/Ujhhgtg/english-homework-helper.git"
+uv tool install git+https://github.com/Ujhhgtg/extensible-homework-helper.git
 ```
 
 #### B. From source, manually
 
 ```bash
-git clone https://github.com/Ujhhgtg/english-homework-helper.git
-cd english-homework-helper
-pip install build
-python -m build
-pip install ./dist/*.tar.gz
+git clone https://github.com/Ujhhgtg/extensible-homework-helper.git
+cd extensible-homework-helper
+uv sync # 请用 uv 谢谢喵
+uv build
+uv pip install ./dist/*.tar.gz
+
+# optional: install pytorch for audio transcription
+uv pip install openai-whisper
+just install-torch-[torch backend]
+
+# optional: you can also install optional dependencies for more features
+# refer to pyproject.toml for now
+uv sync --extra tg-bot
 ```
 
 ### 3. Configure settings
@@ -66,7 +55,7 @@ pip install ./dist/*.tar.gz
 > [!NOTE]
 > Some configuration options are optional, however you won't be able to access advanced features if you skip them.
 
-Rename `local/config.json.example` to `local/config.json` and fill it in. The script will automatically move it to an appropraite location.
+Rename `config.yaml.example` to `config.yaml` and fill it in. The script will automatically move it to an appropriate location.
 
 ## 🔑 Guide: How to use LLMs for free
 
@@ -85,25 +74,7 @@ To use the AI-powered features, you'll need an API key from an LLM provider. Thi
 
 4. Copy the generated key and keep it secure.
 
-5. Add the following in `local/config.json`:
-
-    ```json
-    {
-        ...
-        "ai_client": {
-            "default": 0,
-            "all": [
-                {
-                    "type": "openai",
-                    "api_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-                    "api_key": "YOUR API KEY HERE",
-                    "model": "find one in https://ai.google.dev/gemini-api/docs/models"
-                }
-            ]
-        },
-        ...
-    }
-    ```
+5. Add in `config.yaml`.
 
 ### Ollama (Local)
 
@@ -124,41 +95,13 @@ To use the AI-powered features, you'll need an API key from an LLM provider. Thi
     ollama pull model-name
     ```
 
-4. Add the following in `local/config.json`. Ollama's server typically runs on `http://localhost:11434`.
-
-    ```json
-    {
-        ...
-        "ai_client": {
-            "default": 0,
-            "all": [
-                {
-                    "type": "openai",
-                    "api_url": "http://localhost:11434/v1/",
-                    "api_key": "ollama",
-                    "model": [
-                        "selected": 0,
-                        "all": [
-                            "model1", "model2"
-                        ]
-                    ]
-                }
-            ]
-        },
-        ...
-    }
-    ```
-
 ## 💻 Usage
 
 Run the main script:
 
 ```bash
 # api version
-python -m ehh.cli_api
-
-# browser version
-python -m ehh.cli_browser
+uv run python -m ehh.repl
 ```
 
 ## 🤝 Contributing

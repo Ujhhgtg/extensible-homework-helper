@@ -1,8 +1,8 @@
 from rich.console import Console as RichConsole
 from rich.highlighter import ReprHighlighter as RichHighlighter
-from rich.theme import Theme as RichTheme
-from rich.table import Table as RichTable
 from rich.progress import Progress as RichProgress
+from rich.table import Table as RichTable
+from rich.theme import Theme as RichTheme
 
 from ..base import Messenger
 
@@ -68,5 +68,5 @@ class ConsoleMessenger(Messenger):
         with RichProgress(console=self.rich_console) as progress:
             func(progress, *args, **kwargs)
 
-    def send_exception(self, exception: Exception) -> None:
-        self.rich_console.print_exception(exception, show_locals=True)  # type: ignore
+    def send_exception(self, _: Exception) -> None:
+        self.rich_console.print_exception(show_locals=True)  # type: ignore

@@ -1,12 +1,12 @@
-from openai import OpenAI
 from munch import Munch
+from openai import OpenAI
 
 from ..utils.convert import mask_string_middle
 
 
 # TODO: add multiple types of AIClient: ollama, openai
 class AIClient:
-    type: str
+    kind: str
     api_url: str
     api_key: str
     models: list[str]
@@ -14,9 +14,9 @@ class AIClient:
     client: OpenAI
 
     def __init__(
-        self, type: str, api_url: str, api_key: str, models: list[str], sel_model: int
+        self, kind: str, api_url: str, api_key: str, models: list[str], sel_model: int
     ):
-        self.type = type
+        self.kind = kind
         self.api_url = api_url
         self.api_key = api_key
         self.models = models
@@ -26,11 +26,11 @@ class AIClient:
     @classmethod
     def from_dict(cls, data: Munch):
         return cls(
-            data.type, data.api_url, data.api_key, data.model.all, data.model.selected
+            data.kind, data.api_url, data.api_key, data.model.all, data.model.selected
         )
 
     def describe(self) -> str:
-        return f"{self.type}: {self.api_url} / {mask_string_middle(self.api_key)} / {self.models}"
+        return f"{self.kind}: {self.api_url} / {mask_string_middle(self.api_key)} / {self.models}"
 
     @property
     def selected_model(self) -> str:

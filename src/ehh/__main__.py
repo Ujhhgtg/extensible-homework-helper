@@ -1,3 +1,3 @@
-from .cli_api import main
+from .repl import main
 
 main()

@@ -1,10 +1,10 @@
 import inspect
 from pathlib import Path
 
+import pyperclip
 from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
 
 from .. import globalvars
-from . import feature_flags
 
 _original_print = print
 
@@ -29,33 +29,25 @@ def download_file_with_progress(progress, url: str, filename: str):
             for chunk in response.iter_bytes(chunk_size=8192):
                 f.write(chunk)
                 if progress is not None:
-                    progress.update(task_id, advance=len(chunk))
+                    progress.update(task_id, advance=len(chunk))  # type: ignore
 
 
 def print_and_copy_path(path: str | Path) -> None:
     if isinstance(path, Path):
         path = str(path)
 
-    if feature_flags.PYPERCLIP:
-        import pyperclip
-
-        pyperclip.copy(path)
-
-    print(
-        f"<success> saved to file '{path}'{" (path copied to clipboard)" if feature_flags.PYPERCLIP else ""}"
-    )
-    if not feature_flags.PYPERCLIP:
-        print("<warning> pyperclip not installed, cannot copy path to clipboard")
+    pyperclip.copy(path)
+    print("<success> saved to file (path copied to clipboard)")
 
 
 def patch_whisper_transcribe_progress():
-    if not feature_flags.WHISPER:
+    try:
+        import whisper
+    except ImportError:
         print(
-            "<warning> whisper is not installed; not patching whisper transcribe progress"
+            "<warning> whisper not installed; not patching whisper transcribe progress"
         )
         return
-
-    import whisper
 
     original_source = inspect.getsource(whisper.transcribe)
 

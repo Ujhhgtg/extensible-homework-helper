@@ -2,47 +2,39 @@
 # -*- coding: utf-8 -*-
 
 import json
-from pathlib import Path
 from typing import Optional
 
 import httpx
-
-from telegram import Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    ContextTypes,
-)
 from munch import Munch
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 
-
+from . import globalvars
+from .models.ai_client import AIClient
+from .models.credentials import Credentials
 from .models.homework_record import HomeworkRecord
 from .models.homework_status import HomeworkStatus
-from .models.credentials import Credentials
-from .models.api.token import Token
-from .models.ai_client import AIClient
-from .tasks_api import (
-    get_hw_list,
+from .models.token import Token
+from .tasks import (
     download_audio,
-    download_text,
-    transcribe_audio,
-    get_answers,
-    get_paper_answers,
+    download_text_content,
     generate_answers,
-    submit_answers,
-    start_hw,
+    get_answers,
+    get_hw_list,
+    get_paper_answers,
     login,
+    start_hw,
+    submit_answers,
+    transcribe_audio,
 )
-from .utils.config import load_config, save_config, migrate_config_if_needed
-from .utils.api.constants import BASE_URL
-from .utils.crypto import encodeb64_safe
-from .utils.logging import print
-from .utils.fs import CACHE_DIR
+from .utils.config import load_config, migrate_config_if_needed, save_config
+from .utils.constants import BASE_URL
 from .utils.context.impl.api_context import APIContext
 from .utils.context.impl.console_messenger import ConsoleMessenger
 from .utils.context.impl.telegram_messenger import TelegramMessenger
-from . import globalvars
-
+from .utils.crypto import encodeb64_safe
+from .utils.fs import CACHE_DIR
+from .utils.logging import print
 
 hw_list: list[HomeworkRecord] = []
 token: Optional[Token] = None
@@ -290,7 +282,7 @@ async def command_download_text(
         return
     record = hw_list[idx]
     try:
-        download_text(token, record)
+        download_text_content(token, record)
     except Exception as e:
         await context.bot.send_message(
             chat_id=update.effective_chat.id, text=f"Failed to download text: {e}"
