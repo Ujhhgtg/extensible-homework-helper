@@ -17,8 +17,8 @@ install:
 
 alias r := run-api
 
-# run cli (api version)
-run:
+# run repl
+run-repl:
     @echo "running ehh repl"
     uv run python -m ehh.repl
 
