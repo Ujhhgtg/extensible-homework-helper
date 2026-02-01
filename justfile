@@ -15,7 +15,7 @@ install:
     uv pip install ./dist/*.tar.gz
     @echo "installation complete"
 
-alias r := run-api
+alias r := run-repl
 
 # run repl
 run-repl:
