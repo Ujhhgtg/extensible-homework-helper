@@ -229,15 +229,15 @@ def get_answers(
     answers = []
     for index, answer in enumerate(hw["subResults"]):
         if answer["tagId"].startswith("radio"):
-            answer_type = "choice"
+            answer_kind = "choice"
         elif answer["tagId"].startswith("text"):
-            answer_type = "fill-in-blanks"
+            answer_kind = "fill-in-blanks"
         else:
-            answer_type = "unknown"
+            answer_kind = "unknown"
 
         answer_content = answer["standardAnswer"]
         if (
-            answer_type == "fill-in-blanks"
+            answer_kind == "fill-in-blanks"
             and len(answer_content) >= 2
             and "/" in answer_content
         ):
@@ -246,12 +246,12 @@ def get_answers(
         answers.append(
             {
                 "index": index + 1,
-                "type": answer_type,
+                "kind": answer_kind,
                 "content": answer_content,
             }
         )
         print(
-            f"<info> extracted answer {index + 1}: Type='{answer_type}', Content='{answer_content}'"
+            f"<info> extracted answer {index + 1}: Kind='{answer_kind}', Content='{answer_content}'"
         )
 
     return answers
@@ -751,7 +751,7 @@ def _get_answers_cache(token: Token, record: HomeworkRecord) -> Optional[list[di
             lambda a: {
                 "index": a[0] + 1,
                 "id": a[1]["tagId"],
-                "type": _get_answer_type(a[1]["tagId"]),
+                "kind": _get_answer_type(a[1]["tagId"]),
                 "content": a[1]["text"],
             },
             enumerate(data["data"]),
@@ -790,7 +790,7 @@ def get_paper_answers(token: Token, record: HomeworkRecord) -> Optional[list[dic
             {
                 "index": q["index"],
                 "id": q["id"],
-                "type": _get_answer_type(q["id"]),
+                "kind": _get_answer_type(q["id"]),
                 "content": q["answer"],
             }
         )

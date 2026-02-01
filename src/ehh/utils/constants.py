@@ -37,7 +37,7 @@ Output format (index starts at 1):
 [
     {
         "index": 1,
-        "type": "choice",
+        "kind": "choice",
         "content": "A"
     },
     # other answers
@@ -47,7 +47,7 @@ Output format (index starts at 1):
 Output requirements:
 1. NO MARKDOWN, NO COMMENTS, ONLY PURE JSON
 2. For the groups of questions that lets you fill words/sentences into the blanks inside a whole passage: (1) treat them as "fill-in-blanks" questions, but fill in the letters that represents the words instead of the words themselves. (2) you must not use words/sentences repeatedly. one word/sentence can be used only 0~1 times.
-3. There are only two types: "choice" and "fill-in-blanks". Treat translations as "fill-in-blanks" questions.
+3. There are only two kinds: "choice" and "fill-in-blanks". Treat translations as "fill-in-blanks" questions.
 """
 
 GENERATE_ANSWERS_PROMPT = """
@@ -63,12 +63,12 @@ Output format (index starts at 1):
 [
     {
         "index": 1,
-        "type": "choice",
+        "kind": "choice",
         "content": "A"
     },
     {
         "index": 2,
-        "type": "fill-in-blanks",
+        "kind": "fill-in-blanks",
         "content": "answer to the question"
     },
     # other answers
@@ -78,7 +78,7 @@ Output format (index starts at 1):
 Output requirements:
 1. NO MARKDOWN, NO COMMENTS, ONLY PURE JSON
 2. For the vocabulary part that lets you fill words into the blanks inside a whole passage, treat them as "fill-in-blanks" questions, but fill in the letters that represents the words instead of the words themselves.
-3. There are only two types: "choice" and "fill-in-blanks". Treat translations as "fill-in-blanks" questions.
+3. There are only two kinds: "choice" and "fill-in-blanks". Treat translations as "fill-in-blanks" questions.
 """
 
 GENERATE_TRANSLATION_ANSWERS_PROMPT = """
@@ -94,12 +94,12 @@ Output format (index starts at 1):
 [
     {
         "index": 1,
-        "type": "translation",
+        "kind": "translation",
         "content": "Hello world!"
     },
     {
         "index": 2,
-        "type": "translation",
+        "kind": "translation",
         "content": "Another sentence translated."
     },
     # other answers
@@ -108,7 +108,7 @@ Output format (index starts at 1):
 
 Output requirements:
 1. NO MARKDOWN, NO COMMENTS, ONLY PURE JSON
-2. There is only one type: "translation".
+2. There is only one kind: "translation".
 """
 
 BASE_URL = "https://gateway.jeedu.net"
