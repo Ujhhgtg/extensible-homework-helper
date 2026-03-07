@@ -15,10 +15,10 @@ install:
     uv pip install ./dist/*.tar.gz
     @echo "installation complete"
 
-alias r := run-api
+alias r := run-repl
 
-# run cli (api version)
-run:
+# run repl
+run-repl:
     @echo "running ehh repl"
     uv run python -m ehh.repl
 
@@ -29,8 +29,8 @@ run-bot:
 
 # run custom
 run NAME:
-    @echo "running ehh {{NAME}}"
-    uv run python -m ehh.{{NAME}}
+    @echo "running ehh {{ NAME }}"
+    uv run python -m ehh.{{ NAME }}
 
 # install pytorch with cuda 12.6 support
 install-torch-cu126:
