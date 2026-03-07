@@ -29,6 +29,13 @@ dependencies = [
 tg-bot = ["python-telegram-bot"]
 transcription = ["openai-whisper", "torch", "torchvision"]
 
+[project.scripts]
+ehh-repl = "ehh:repl"
+ehh-tgbot = "ehh:telegram_bot"
+
+[tool.uv]
+package = true
+
 [project.urls]
 Homepage = "https://github.com/Ujhhgtg/extensible-homework-helper"
 Issues = "https://github.com/Ujhhgtg/extensible-homework-helper/issues"

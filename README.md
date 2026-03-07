@@ -26,31 +26,27 @@ You need to have Python 3.12+ installed on your system.
 
 ### 1. Install package
 
-#### A. From source, with uv
+#### A. From remote source, with uv
 
 ```bash
 uv tool install git+https://github.com/Ujhhgtg/extensible-homework-helper.git
+
+# optional: include additional deps
+uv tool install git+https://github.com/Ujhhgtg/extensible-homework-helper.git --with whisper
 ```
 
-#### B. From source, manually
+#### B. From local source, with uv
 
 ```bash
 git clone https://github.com/Ujhhgtg/extensible-homework-helper.git
 cd extensible-homework-helper
-uv sync # 请用 uv 谢谢喵
-uv build
-uv pip install ./dist/*.tar.gz
+uv tool install .
 
-# optional: install pytorch for audio transcription
-uv pip install openai-whisper
-just install-torch-[torch backend]
-
-# optional: you can also install optional dependencies for more features
-# refer to pyproject.toml for now
-uv sync --extra tg-bot
+# optional: include additional deps
+uv tool install . --with whisper
 ```
 
-### 3. Configure settings
+### 2. Configure settings
 
 > [!NOTE]
 > Some configuration options are optional, however you won't be able to access advanced features if you skip them.
@@ -100,8 +96,11 @@ To use the AI-powered features, you'll need an API key from an LLM provider. Thi
 Run the main script:
 
 ```bash
-# api version
-uv run python -m ehh.repl
+# repl
+ehh-repl
+
+# telegram bot
+ehh-tgbot
 ```
 
 ## 🤝 Contributing

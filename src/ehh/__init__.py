@@ -6,6 +6,7 @@ except ImportError:
 
     def telegram_bot():
         print("telegram_bot is not available. ensure all dependencies are installed.")
+        exit(1)
 
 
 __all__ = ["repl", "telegram_bot"]
