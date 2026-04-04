@@ -42,9 +42,9 @@ install-torch-cu130:
     @echo "installed torch with CUDA 13.0 support"
 
 # install pytorch with rocm 7.1 support
-install-torch-rocm71:
-    uv tool install . --with torch --with torchvision --index-url https://download.pytorch.org/whl/rocm7.1
-    @echo "installed torch with ROCm 7.1 support"
+install-torch-rocm72:
+    uv tool install . --with torch --with torchvision --index-url https://download.pytorch.org/whl/rocm7.2
+    @echo "installed torch with ROCm 7.2 support"
 
 # install pytorch with rocm 7.1 support
 install-torch-cpu:
