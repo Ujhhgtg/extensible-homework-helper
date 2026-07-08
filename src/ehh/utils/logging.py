@@ -29,7 +29,7 @@ def download_file_with_progress(progress, url: str, filename: str):
             for chunk in response.iter_bytes(chunk_size=8192):
                 f.write(chunk)
                 if progress is not None:
-                    progress.update(task_id, advance=len(chunk))  # type: ignore
+                    progress.update(task_id, advance=len(chunk))
 
 
 def print_and_copy_path(path: str | Path) -> None:
@@ -76,7 +76,7 @@ def patch_whisper_transcribe_progress():
     )
     patched_source = patched_source.replace(tqdm_update_line, rich_update_line)
 
-    whisper.transcribe  # type: ignore
+    whisper.transcribe
     execution_scope = whisper.transcribe.__dict__.copy()
     execution_scope.update(whisper.transcribe.__globals__)
     execution_scope.update(whisper.__dict__)

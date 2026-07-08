@@ -28,5 +28,5 @@ class Context:
         self.messenger = messenger
         self.config: Munch = None  # type: ignore
         if feature_flags.WHISPER:
-            self.whisper_model: Optional[Whisper] = None  # type: ignore
+            self.whisper_model: Optional[Whisper] = None
         self.http_client: httpx.Client = httpx.Client(timeout=30)

@@ -21,7 +21,14 @@ class AIClient:
         self.api_key = api_key
         self.models = models
         self.selected_model_index = sel_model
-        self.client = OpenAI(api_key=self.api_key, base_url=self.api_url)
+        # reasoning models on slow proxies can take well over a minute; give the
+        # request a generous timeout so it isn't cut off by the SDK default.
+        self.client = OpenAI(
+            api_key=self.api_key,
+            base_url=self.api_url,
+            timeout=180.0,
+            max_retries=2,
+        )
 
     @classmethod
     def from_dict(cls, data: Munch):

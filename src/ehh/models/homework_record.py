@@ -20,5 +20,8 @@ class HomeworkRecord:
     api_task_paper_id: str | None = None
     api_batch_id: str | None = None
     api_sentence_id: str | None = None
+    # title of the parent group for expandable homework; None for standalone items.
+    # purely a display label, the group itself is not a completable assignment.
+    group_title: str | None = None
     # start_time: str | None = None
     # end_time: str | None = None

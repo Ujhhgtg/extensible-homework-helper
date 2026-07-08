@@ -1,7 +1,9 @@
+import asyncio
 import random
 import re
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 import json5
@@ -22,6 +24,7 @@ from .utils.constants import (
     FIND_SCHOOLS_URL,
     GENERATE_ANSWERS_PROMPT,
     GENERATE_ANSWERS_WITH_LISTENING_PROMPT,
+    GENERATE_SENTENCE_TRANSLATION_PROMPT,
     GENERATE_TRANSLATION_ANSWERS_PROMPT,
     GET_HW_CONTENT_URL,
     GET_HW_DETAILS_URL,
@@ -33,7 +36,9 @@ from .utils.constants import (
     SAVE_ANSWERS_CACHE_URL,
     START_HW_URL,
     SUBMIT_ANSWERS_URL,
+    SUBMIT_TRANSLATION_URL,
     TIME_FORMAT,
+    UPLOAD_URL,
 )
 from .utils.crypto import encodeb64_safe, get_md5_str_of_str
 from .utils.fs import CACHE_DIR, read_file_text
@@ -121,6 +126,33 @@ def _get_all_kind_hw_score(item: dict) -> int:
     return score  # type: ignore
 
 
+def _build_hw_record(
+    item: dict, kind: HomeworkKind, group_title: str | None = None
+) -> HomeworkRecord:
+    return HomeworkRecord(
+        group_title=group_title,
+        api_id=item["id"],
+        api_task_id=item.get("taskId", None),
+        api_task_paper_id=item.get("taskPaperId", None),
+        api_batch_id=item.get("batchId", None),
+        # translation (sentence) tasks: userSentenceId is submit's `oldUserId`
+        api_sentence_id=item.get("userSentenceId", None),
+        title=item.get("taskTitle", None) or item.get("title", None),
+        kind=kind,
+        publisher_name=item["assignerName"],
+        # start_time=item["startTime"],
+        # end_time=item["completeTime"],
+        publish_time=datetime.strptime(item["beginTime"], TIME_FORMAT),
+        # due_time=item["endTime"],
+        current_score=_get_all_kind_hw_score(item),
+        # pass_score=0,  # idk which is pass score
+        total_score=item["totalScore"],
+        # is_pass=True,  # idk which is pass condition
+        # teacher_comment=None,  # idk which is teacher comment
+        status=_get_status_enum(int(item["status"])),
+    )
+
+
 def _get_kind_hw_list(
     url: str, headers: dict[str, str], kind: HomeworkKind
 ) -> list[HomeworkRecord]:
@@ -144,27 +176,17 @@ def _get_kind_hw_list(
         for item in (
             data["data"].get("userTasks", None) or data["data"].get("tasks", None) or []
         ):
-            hw_list.append(
-                HomeworkRecord(
-                    api_id=item["id"],
-                    api_task_id=item.get("taskId", None),
-                    api_task_paper_id=item.get("taskPaperId", None),
-                    api_batch_id=item.get("batchId", None),
-                    title=item.get("taskTitle", None) or item.get("title", None),
-                    kind=kind,
-                    publisher_name=item["assignerName"],
-                    # start_time=item["startTime"],
-                    # end_time=item["completeTime"],
-                    publish_time=datetime.strptime(item["beginTime"], TIME_FORMAT),
-                    # due_time=item["endTime"],
-                    current_score=_get_all_kind_hw_score(item),
-                    # pass_score=0,  # idk which is pass score
-                    total_score=item["totalScore"],
-                    # is_pass=True,  # idk which is pass condition
-                    # teacher_comment=None,  # idk which is teacher comment
-                    status=_get_status_enum(int(item["status"])),
-                )
-            )
+            # a merged/expandable homework item (mergeType == 1) is only a group
+            # header; its real sub-assignments live in `mergeList`. expand them so
+            # each sub-assignment becomes an individually operable record. regular
+            # items have an empty/absent `mergeList` and are added as-is.
+            children = item.get("mergeList", None)
+            if children:
+                group_title = item.get("taskTitle", None) or item.get("title", None)
+                for child in sorted(children, key=lambda c: c.get("taskSort", 0) or 0):
+                    hw_list.append(_build_hw_record(child, kind, group_title))
+            else:
+                hw_list.append(_build_hw_record(item, kind))
 
         cur_page_index += 1
 
@@ -228,20 +250,10 @@ def get_answers(
 
     answers = []
     for index, answer in enumerate(hw["subResults"]):
-        if answer["tagId"].startswith("radio"):
-            answer_kind = "choice"
-        elif answer["tagId"].startswith("text"):
-            answer_kind = "fill-in-blanks"
-        else:
-            answer_kind = "unknown"
-
-        answer_content = answer["standardAnswer"]
-        if (
-            answer_kind == "fill-in-blanks"
-            and len(answer_content) >= 2
-            and "/" in answer_content
-        ):
-            answer_content = answer_content.split("/")
+        answer_kind = _get_answer_kind(answer["tagId"])
+        answer_content = _normalize_answer_content(
+            answer_kind, answer["standardAnswer"]
+        )
 
         answers.append(
             {
@@ -294,6 +306,7 @@ def _get_questions(token: Token, record: HomeworkRecord) -> Optional[list[dict]]
                 "id": q["tagId"],  # attr 'name' of radio and input in web
                 "answer": q["answer"],  # bruh so it just returns the answer directly???
                 "score": q["score"],
+                "type": q.get("type"),  # "1"=choice, "3"=speaking
             },
             paper["flows"],
         )
@@ -301,6 +314,318 @@ def _get_questions(token: Token, record: HomeworkRecord) -> Optional[list[dict]]
 
     q_list.sort(key=lambda elem: elem["index"])
     return q_list
+
+
+DEFAULT_TTS_VOICE = "en-US-AriaNeural"
+
+
+def _get_tts_voice() -> str:
+    tts_conf = getattr(globalvars.context.config, "tts", None)
+    if tts_conf is not None:
+        voice = getattr(tts_conf, "voice", None)
+        if voice:
+            return str(voice)
+    return DEFAULT_TTS_VOICE
+
+
+def _speaking_answer_text(answer) -> Optional[str]:
+    # a speaking flow answer may hold several acceptable responses separated by
+    # "|"; pick the first non-empty one to synthesize.
+    if isinstance(answer, str):
+        text = answer
+    elif isinstance(answer, list):
+        text = next((str(a) for a in answer if str(a).strip()), "")
+    else:
+        text = str(answer) if answer is not None else ""
+    text = text.split("|")[0].strip() if "|" in text else text.strip()
+    return text or None
+
+
+def generate_speaking_audio(
+    token: Token, record: HomeworkRecord
+) -> Optional[list[dict]]:
+    """Synthesize reference-answer audio for every speaking question in a paper.
+
+    Returns a list of {index, id, text, path} for the generated clips, or None on
+    failure. This only produces the audio files locally; uploading/submitting them
+    is a separate step.
+    """
+    print(f"--- step: generate speaking audio for '{record.title}' ---")
+
+    try:
+        import edge_tts
+    except ImportError:
+        print("<error> edge-tts not installed; install the 'tts' extra requirement")
+        return None
+
+    questions = _get_questions(token, record)
+    if questions is None:
+        print("<error> failed to get questions")
+        return None
+
+    speaking = [
+        q
+        for q in questions
+        if _get_answer_kind(q["id"]) == "speaking" or q.get("type") == "3"
+    ]
+    if not speaking:
+        print("<info> no speaking questions found in this homework item")
+        return []
+
+    voice = _get_tts_voice()
+    print(
+        f"<info> synthesizing {len(speaking)} speaking answer(s) with voice '{voice}'"
+    )
+
+    results: list[dict] = []
+    for q in speaking:
+        text = _speaking_answer_text(q["answer"])
+        if text is None:
+            print(f"<warning> question {q['index']} has no reference answer; skipping")
+            continue
+
+        path = (
+            CACHE_DIR
+            / f"homework_{encodeb64_safe(record.title)}_speaking_{q['id']}.mp3"
+        )
+        try:
+            communicate = edge_tts.Communicate(text, voice)
+            asyncio.run(communicate.save(str(path)))
+        except Exception as tts_e:
+            print(f"<error> failed to synthesize audio for question {q['index']}:")
+            globalvars.context.messenger.send_exception(tts_e)
+            return None
+
+        size = Path(path).stat().st_size if Path(path).is_file() else 0
+        if size == 0:
+            print(f"<error> synthesized audio for question {q['index']} is empty")
+            return None
+
+        print(
+            f"<info> generated audio for question {q['index']} "
+            f"({size} bytes): '{text[:50]}{'...' if len(text) > 50 else ''}'"
+        )
+        results.append(
+            {"index": q["index"], "id": q["id"], "text": text, "path": str(path)}
+        )
+
+    print(f"<success> generated {len(results)} speaking audio clip(s)")
+    return results
+
+
+def _upload_speaking_audio(
+    token: Token, record: HomeworkRecord, tag_id: str, path: str | Path
+) -> Optional[str]:
+    """Upload one mp3 for a speaking question; return the attachmentId or None."""
+    headers = _get_headers(token)
+    if headers is None:
+        print("<error> authorization failed")
+        return None
+
+    path = Path(path)
+    if not path.is_file():
+        print(f"<error> audio file not found: {path}")
+        return None
+
+    params = {
+        "businessId": record.api_id,
+        "type": "4",
+        "uploadType": "4",
+        "attachType": "mp3",
+        "attachName": f"{tag_id}-口语答案",
+    }
+    with open(path, "rb") as f:
+        files = {"file": ("blob", f, "audio/mp3")}
+        response = globalvars.context.http_client.post(
+            UPLOAD_URL, headers=headers, params=params, files=files
+        )
+    data = response.json()
+    if data.get("success", False) is False:
+        print(f"<error> failed to upload audio for {tag_id}: {data}")
+        return None
+
+    attachment_id = data.get("data", {}).get("id", None)
+    if not attachment_id:
+        print(f"<error> upload response has no attachment id: {data}")
+        return None
+
+    return str(attachment_id)
+
+
+def _upload_speaking_clips(
+    token: Token, record: HomeworkRecord
+) -> Optional[dict[str, str]]:
+    """Generate + upload reference audio for every speaking question.
+
+    Returns a {tagId: attachmentId} map (empty if there are no speaking questions),
+    or None if generation or any upload failed.
+    """
+    clips = generate_speaking_audio(token, record)
+    if clips is None:
+        print("<error> failed to generate speaking audio")
+        return None
+
+    attachment_by_tag: dict[str, str] = {}
+    for clip in clips:
+        print(f"<info> uploading audio for question {clip['index']} ({clip['id']})")
+        attachment_id = _upload_speaking_audio(token, record, clip["id"], clip["path"])
+        if attachment_id is None:
+            print(f"<error> upload failed for question {clip['index']}; aborting")
+            return None
+        attachment_by_tag[clip["id"]] = attachment_id
+        print(f"<info> uploaded; attachmentId={attachment_id}")
+
+    return attachment_by_tag
+
+
+def _build_answers_payload(
+    paper_answers: list[dict], attachment_by_tag: dict[str, str]
+) -> list[dict]:
+    """Assemble the saveCache answers array from paper answers, wiring uploaded
+    attachmentIds into speaking questions and text into the rest."""
+    payload_answers = []
+    for a in paper_answers:
+        tag_id = a["id"]
+        if a["kind"] == "speaking":
+            attachment_id = attachment_by_tag.get(tag_id)
+            if attachment_id is None:
+                # a speaking question whose audio we couldn't generate/upload
+                continue
+            payload_answers.append(
+                {
+                    "tagId": tag_id,
+                    "text": None,
+                    "attachmentId": attachment_id,
+                    "writingAttachmentId": None,
+                    "practiceMode": 1,
+                    "check": False,
+                }
+            )
+        else:
+            content = a["content"]
+            if isinstance(content, list):
+                content = random.choice(content)
+            payload_answers.append(
+                {
+                    "tagId": tag_id,
+                    "text": content,
+                    "attachmentId": "",
+                    "writingAttachmentId": None,
+                    "practiceMode": 1,
+                    "check": False,
+                }
+            )
+    return payload_answers
+
+
+def _save_answers_cache_payload(
+    token: Token, record: HomeworkRecord, payload_answers: list[dict]
+) -> bool:
+    headers = _get_headers(token)
+    if headers is None:
+        print("<error> authorization failed")
+        return False
+
+    payload = {"answers": payload_answers, "id": record.api_id}
+    response = globalvars.context.http_client.post(
+        SAVE_ANSWERS_CACHE_URL, json=payload, headers=headers
+    )
+    data = response.json()
+    if data.get("success", False) is False:
+        print(f"<error> failed to save answers cache: {data}")
+        return False
+
+    return True
+
+
+def complete_homework(
+    token: Token,
+    record: HomeworkRecord,
+    submit: bool = False,
+    ai_client: Optional[AIClient] = None,
+) -> Optional[list[dict]]:
+    """Full pipeline for a homework item, handling any question type.
+
+    - Questions: pull every answer from the paper, synthesize + upload audio for
+      speaking questions, and cache the whole answer set via saveCache.
+    - Translation: use the LLM (ai_client required) to translate every sentence and
+      save a local draft.
+
+    Does NOT submit unless `submit` is explicitly True.
+    """
+    print(f"--- step: complete homework '{record.title}' ---")
+
+    if record.kind == HomeworkKind.TRANSLATION:
+        if ai_client is None:
+            print("<error> Translation items need an AI client; select one first")
+            return None
+        answered = generate_translation_answers(token, record, ai_client)
+        if answered is None:
+            print("<error> failed to generate translation answers")
+            return None
+        if submit:
+            print("<info> submitting translation...")
+            submit_translation(token, record)
+        else:
+            print(
+                "<info> translation draft saved but NOT submitted; review and submit manually"
+            )
+        return answered
+
+    paper_answers = get_paper_answers(token, record)
+    if paper_answers is None:
+        print("<error> failed to get paper answers")
+        return None
+
+    attachment_by_tag = _upload_speaking_clips(token, record)
+    if attachment_by_tag is None:
+        return None
+
+    payload_answers = _build_answers_payload(paper_answers, attachment_by_tag)
+    if not payload_answers:
+        print("<error> no answers to cache")
+        return None
+
+    if not _save_answers_cache_payload(token, record, payload_answers):
+        return None
+
+    print(
+        f"<success> completed '{record.title}': uploaded "
+        f"{len(attachment_by_tag)} speaking clip(s), cached "
+        f"{len(payload_answers)} answer(s)"
+    )
+
+    if submit:
+        print("<info> submitting homework...")
+        submit_answers(token, record)
+    else:
+        print("<info> answers cached but NOT submitted; review and submit manually")
+
+    return payload_answers
+
+
+def fill_in_speaking_answers(
+    token: Token, record: HomeworkRecord, submit: bool = False
+) -> Optional[list[dict]]:
+    """Generate reference-answer audio for every speaking question, upload each,
+    and cache the full answer set via saveCache. Thin wrapper over
+    complete_homework that no-ops when the item has no speaking questions.
+    """
+    print(f"--- step: fill in speaking answers for '{record.title}' ---")
+
+    if record.kind == HomeworkKind.TRANSLATION:
+        print("<error> Translation items have no speaking questions")
+        return None
+
+    paper_answers = get_paper_answers(token, record)
+    if paper_answers is None:
+        print("<error> failed to get paper answers")
+        return None
+    if not any(a["kind"] == "speaking" for a in paper_answers):
+        print("<info> no speaking questions to fill in")
+        return []
+
+    return complete_homework(token, record, submit=submit)
 
 
 def _get_audio_url(token: Token, record: HomeworkRecord) -> Optional[str]:
@@ -341,6 +666,176 @@ def download_audio(token: Token, record: HomeworkRecord) -> None:
         return
 
 
+def _get_translation_questions(
+    token: Token, record: HomeworkRecord
+) -> Optional[list[dict]]:
+    """Fetch the sentence-translation questions for a Translation task. Each item
+    carries: id, sentenceId, questionNumber, word, pattern, question (Chinese),
+    answer (reference), score."""
+    headers = _get_headers(token)
+    if headers is None:
+        print("<error> authorization failed")
+        return None
+
+    response = globalvars.context.http_client.post(
+        GET_TRANSLATION_HW_CONTENT_URL,
+        headers=headers,
+        json={"id": record.api_id},
+    )
+    data = response.json()
+    if data.get("success", False) is False:
+        print(f"<error> failed to get translation questions: {data}")
+        return None
+
+    questions = data.get("data", []) or []
+    questions.sort(key=lambda q: q.get("questionNumber", 0))
+    return questions
+
+
+def _translation_draft_path(record: HomeworkRecord):
+    return CACHE_DIR / f"homework_{encodeb64_safe(record.title)}_translation.json"
+
+
+def generate_translation_answers(
+    token: Token, record: HomeworkRecord, client: AIClient
+) -> Optional[list[dict]]:
+    """Use the LLM to translate every sentence, obeying the required word/pattern.
+
+    Returns the full question objects (as returned by the API) with each `answer`
+    replaced by the generated translation, ready to submit. Also writes them to a
+    local draft file so they can be reviewed/submitted separately.
+    """
+    print(f"--- step: generate translation answers for '{record.title}' ---")
+
+    if record.kind != HomeworkKind.TRANSLATION:
+        print("<error> not a Translation homework item")
+        return None
+
+    questions = _get_translation_questions(token, record)
+    if questions is None:
+        print("<error> failed to get translation questions")
+        return None
+    if not questions:
+        print("<error> no translation questions found")
+        return None
+
+    model_input = json5.dumps(
+        [
+            {
+                "index": q["questionNumber"],
+                "word": q.get("word", ""),
+                "pattern": q.get("pattern", ""),
+                "question": q["question"],
+            }
+            for q in questions
+        ],
+        ensure_ascii=False,
+    )
+    prompt = GENERATE_SENTENCE_TRANSLATION_PROMPT.replace("{questions}", model_input)
+
+    print(f"<info> current AI client: {client.describe()}")
+    print("<info> requesting model for translations (this may take a while)...")
+    try:
+        response = client.client.chat.completions.create(
+            model=client.selected_model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "You are a professional English teacher and translator.",
+                        }
+                    ],
+                },
+                {"role": "user", "content": [{"type": "text", "text": prompt}]},
+            ],
+        )
+    except openai.APIError as e:
+        print(f"<error> api returned error: {e}")
+        return None
+
+    raw_data = response.choices[0].message.content
+    if raw_data is None:
+        print("<error> model returned null")
+        return None
+
+    try:
+        generated: list[dict] = json5.loads(raw_data)
+    except ValueError:
+        print("<error> model result is not valid json")
+        return None
+
+    if len(generated) != len(questions):
+        print(
+            f"<error> model returned {len(generated)} translations "
+            f"for {len(questions)} questions"
+        )
+        return None
+
+    # map generated content back onto the questions by index order
+    by_index = {g.get("index"): g.get("content") for g in generated}
+    answered = []
+    for q in questions:
+        content = by_index.get(q["questionNumber"])
+        if not content:
+            print(f"<error> no translation for question {q['questionNumber']}")
+            return None
+        item = dict(q)
+        item["answer"] = content
+        answered.append(item)
+        print(f"<info> Q{q['questionNumber']} ({q.get('word', '').strip()}): {content}")
+
+    draft_path = _translation_draft_path(record)
+    with open(draft_path, "wt", encoding="utf-8") as f:
+        f.write(json5.dumps(answered, ensure_ascii=False, indent=4))
+    print(f"<success> generated {len(answered)} translation(s)")
+    print_and_copy_path(draft_path)
+    return answered
+
+
+def submit_translation(token: Token, record: HomeworkRecord) -> None:
+    """Submit a Translation task using the local draft produced by
+    generate_translation_answers."""
+    print(f"--- step: submit translation for '{record.title}' ---")
+
+    headers = _get_headers(token)
+    if headers is None:
+        print("<error> authorization failed")
+        return
+
+    draft_path = _translation_draft_path(record)
+    if not draft_path.is_file():
+        print(
+            "<error> no translation draft found; run 'answers complete' first to "
+            "generate answers"
+        )
+        return
+
+    with open(draft_path, "rt", encoding="utf-8") as f:
+        answered: list[dict] = json5.loads(f.read())
+
+    if record.api_sentence_id is None:
+        print("<error> missing userSentenceId; cannot submit translation")
+        return
+
+    payload = {
+        "id": record.api_id,
+        "oldUserId": record.api_sentence_id,
+        "imgUrl": "",
+        "sentenceUserTaskAnswerDtoList": answered,
+    }
+    response = globalvars.context.http_client.post(
+        SUBMIT_TRANSLATION_URL, json=payload, headers=headers
+    )
+    data = response.json()
+    if data.get("success", False) is False:
+        print(f"<error> failed to submit translation: {data}")
+        return
+
+    print("<success> translation submitted")
+
+
 WHITESPACE_PATTERN = re.compile(r"[^\S\n]+")
 
 
@@ -366,28 +861,20 @@ def get_text_content(token: Token, record: HomeworkRecord) -> Optional[str]:
         return text_content
 
     elif record.kind == HomeworkKind.TRANSLATION:
-        headers = _get_headers(token)
-        if headers is None:
-            print("<error> authorization failed")
+        questions = _get_translation_questions(token, record)
+        if questions is None:
+            print("<error> failed to get translation questions")
             return None
 
-        response = globalvars.context.http_client.post(
-            GET_TRANSLATION_HW_CONTENT_URL,
-            headers=headers,
-            json={"id": record.api_id},
-        )
-
-        data = response.json()
-        if data.get("success", False) is False:
-            print(f"<error> failed to get homework text content: {data}")
-            return None
-
-        return "\n".join(
-            map(
-                lambda e: f"{e['questionNumber']}. {e['question']}",
-                data["data"],
-            )
-        )
+        lines = []
+        for q in questions:
+            word = (q.get("word") or "").strip()
+            pattern = (q.get("pattern") or "").strip()
+            hint = f"  [word: {word}]" if word else ""
+            if pattern:
+                hint += f" [pattern: {pattern}]"
+            lines.append(f"{q['questionNumber']}. {q['question']}{hint}")
+        return "\n".join(lines)
 
 
 def download_text_content(token: Token, record: HomeworkRecord) -> None:
@@ -571,7 +1058,7 @@ def generate_answers(
         return None
 
     try:
-        answers: list[dict] = json5.loads(raw_data)  # type: ignore
+        answers: list[dict] = json5.loads(raw_data)
         print(
             f"<success> model result is valid; totalling {len(raw_data)} chars in length"
         )
@@ -726,7 +1213,23 @@ def _get_answer_kind(id: str):
         return "choice"
     if id.startswith("text"):
         return "fill-in-blanks"
+    # speaking questions (e.g. in 听说训练) use a bare numeric tagId with no prefix
+    if id and id[0].isdigit():
+        return "speaking"
     return "unknown"
+
+
+def _normalize_answer_content(kind: str, content):
+    if not isinstance(content, str):
+        return content
+    # fill-in-blanks may list acceptable answers separated by "/"
+    if kind == "fill-in-blanks" and len(content) >= 2 and "/" in content:
+        return content.split("/")
+    # speaking questions may list alternative acceptable responses separated by "|"
+    if kind == "speaking" and "|" in content:
+        parts = [part.strip() for part in content.split("|") if part.strip()]
+        return parts if len(parts) >= 2 else content
+    return content
 
 
 def _get_answers_cache(token: Token, record: HomeworkRecord) -> Optional[list[dict]]:
@@ -746,6 +1249,12 @@ def _get_answers_cache(token: Token, record: HomeworkRecord) -> Optional[list[di
         print(f"<error> failed to get answers cache: {data}")
         return None
 
+    cached = data.get("data")
+    if not cached:
+        # no cache to submit (e.g. the item was never filled in or already submitted)
+        print("<warning> no cached answers found for this item")
+        return None
+
     return list(
         map(
             lambda a: {
@@ -754,7 +1263,7 @@ def _get_answers_cache(token: Token, record: HomeworkRecord) -> Optional[list[di
                 "kind": _get_answer_kind(a[1]["tagId"]),
                 "content": a[1]["text"],
             },
-            enumerate(data["data"]),
+            enumerate(cached),
         )
     )
 
@@ -775,13 +1284,7 @@ def get_paper_answers(token: Token, record: HomeworkRecord) -> Optional[list[dic
     result: list[dict] = []
     for q in questions:
         answer_kind = _get_answer_kind(q["id"])
-        answer_content = q["answer"]
-        if (
-            answer_kind == "fill-in-blanks"
-            and len(answer_content) >= 2
-            and "/" in answer_content
-        ):
-            answer_content = answer_content.split("/")
+        answer_content = _normalize_answer_content(answer_kind, q["answer"])
 
         print(
             f"<info> extracted answer {q['index']}: Kind='{answer_kind}', Content='{answer_content}'"
@@ -790,8 +1293,8 @@ def get_paper_answers(token: Token, record: HomeworkRecord) -> Optional[list[dic
             {
                 "index": q["index"],
                 "id": q["id"],
-                "kind": _get_answer_kind(q["id"]),
-                "content": q["answer"],
+                "kind": answer_kind,
+                "content": answer_content,
             }
         )
     return result
@@ -799,6 +1302,11 @@ def get_paper_answers(token: Token, record: HomeworkRecord) -> Optional[list[dic
 
 def submit_answers(token: Token, record: HomeworkRecord) -> None:
     print(f"--- step: submit answers from paper for '{record.title}' ---")
+
+    # translation tasks use a different endpoint and submit a local draft
+    if record.kind == HomeworkKind.TRANSLATION:
+        submit_translation(token, record)
+        return
 
     headers = _get_headers(token)
     if headers is None:
@@ -843,6 +1351,43 @@ def start_hw(token: Token, record: HomeworkRecord) -> None:
 
 
 def print_hw_list(hw_list: list[HomeworkRecord]) -> None:
+    rows: list[tuple] = []
+    cur_group: str | None = None
+    for index, record in enumerate(hw_list):
+        # emit a non-indexed header row whenever we enter a new expandable group.
+        # the group is only a label, so it gets no index and is not operable.
+        if record.group_title is not None and record.group_title != cur_group:
+            cur_group = record.group_title
+            rows.append(
+                (
+                    "",
+                    "",
+                    f"[bold cyan]▼ {record.group_title}[/bold cyan]",
+                    "",
+                    "",
+                    "",
+                    "",
+                )
+            )
+        elif record.group_title is None:
+            cur_group = None
+
+        title = record.title
+        if record.group_title is not None:
+            title = f"  {title}"  # indent children under their group header
+
+        rows.append(
+            (
+                str(index),
+                record.publish_time.strftime(TIME_FORMAT),
+                title,
+                record.status.value[1],  # type: ignore
+                record.publisher_name,
+                record.kind.value,
+                f"{record.current_score}/{record.total_score}",
+            )
+        )
+
     globalvars.context.messenger.send_table(
         title="Homework List",
         show_header=True,
@@ -855,18 +1400,5 @@ def print_hw_list(hw_list: list[HomeworkRecord]) -> None:
             ("Kind", "blue", "center"),
             ("Score", "red", "center"),
         ],
-        rows=list(
-            map(
-                lambda enum_obj: (
-                    str(enum_obj[0]),
-                    enum_obj[1].publish_time.strftime(TIME_FORMAT),
-                    enum_obj[1].title,
-                    enum_obj[1].status.value[1],  # type: ignore
-                    enum_obj[1].publisher_name,
-                    enum_obj[1].kind.value,
-                    f"{enum_obj[1].current_score}/{enum_obj[1].total_score}",
-                ),
-                enumerate(hw_list),
-            )
-        ),
+        rows=rows,
     )

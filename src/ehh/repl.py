@@ -3,6 +3,7 @@
 
 
 import json
+import re
 import shlex
 from typing import Optional
 
@@ -14,14 +15,18 @@ from rich import traceback
 from . import globalvars
 from .models.ai_client import AIClient
 from .models.credentials import Credentials
+from .models.homework_kind import HomeworkKind
 from .models.homework_record import HomeworkRecord
 from .models.homework_status import HomeworkStatus
 from .models.token import Token
 from .tasks import (
+    complete_homework,
     download_audio,
     download_text_content,
     fill_in_answers,
+    fill_in_speaking_answers,
     generate_answers,
+    generate_speaking_audio,
     get_answers,
     get_hw_list,
     get_paper_answers,
@@ -36,11 +41,143 @@ from .utils.config import load_config, migrate_config_if_needed, save_config
 from .utils.constants import BASE_URL, COMPLETION_WORD_MAP
 from .utils.context.impl.api_context import APIContext
 from .utils.context.impl.console_messenger import ConsoleMessenger
-from .utils.convert import try_parse_int
+from .utils.convert import parse_index_ranges, try_parse_int
 from .utils.crypto import encodeb64_safe
 from .utils.fs import CACHE_DIR
 from .utils.logging import patch_whisper_transcribe_progress, print, print_and_copy_path
 from .utils.prompt import ReplCompleter, prompt_for_yn
+
+
+def _filename_stem(hw: HomeworkRecord, use_title: bool) -> str:
+    """Cache-file stem for a homework item: the human-readable (sanitized) title
+    when use_title is set, otherwise the url-safe encoded title."""
+    if use_title:
+        # strip characters unsafe for filenames; keep it readable
+        return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", hw.title).strip() or encodeb64_safe(
+            hw.title
+        )
+    return encodeb64_safe(hw.title)
+
+
+def _run_answers_item(
+    sub: str,
+    hw: HomeworkRecord,
+    token: Optional[Token],
+    ai_client: Optional[AIClient],
+    session: PromptSession,
+    use_title: bool = False,
+) -> bool:
+    """Execute a batch-friendly `answers <sub>` action on one homework item.
+
+    Returns True if the homework list should be refreshed afterward (i.e. `start`).
+    """
+    match sub:
+        case "download":
+            if token is None:
+                print("<error> not logged in; cannot retrieve answers")
+                return False
+
+            answers = get_answers(token, hw)
+            if answers is None:
+                print("<error> no answers retrieved; cannot save to file")
+                return False
+
+            answers_file = (
+                CACHE_DIR / f"homework_{_filename_stem(hw, use_title)}_answers.json"
+            )
+            with open(answers_file, "wt", encoding="utf-8") as f:
+                f.write(json.dumps(answers, indent=4, ensure_ascii=False))
+            print_and_copy_path(answers_file)
+
+        case "download_from_paper":
+            if token is None:
+                print("<error> not logged in; cannot retrieve answers")
+                return False
+
+            answers = get_paper_answers(token, hw)
+            if answers is None:
+                print("<error> no answers retrieved; cannot save to file")
+                return False
+
+            answers_file = (
+                CACHE_DIR
+                / f"homework_{_filename_stem(hw, use_title)}_answers_paper.json"
+            )
+            with open(answers_file, "wt", encoding="utf-8") as f:
+                f.write(json.dumps(answers, indent=4, ensure_ascii=False))
+            print_and_copy_path(answers_file)
+
+        case "generate":
+            if ai_client is None:
+                print("<error> no ai client selected")
+                return False
+
+            if token is None:
+                print(
+                    "<warning> not logged in, cannot determine whether hw has audio"
+                )
+                has_audio_manual = prompt_for_yn(session, "hw has audio? ")
+            else:
+                has_audio_manual = None
+
+            answers = generate_answers(token, hw, ai_client, has_audio_manual)
+            if answers is None:
+                print("<error> failed to generate answers")
+                return False
+
+            answers_file = (
+                CACHE_DIR / f"homework_{encodeb64_safe(hw.title)}_answers_gen.json"
+            )
+            with open(answers_file, "wt", encoding="utf-8") as f:
+                f.write(json.dumps(answers, indent=4, ensure_ascii=False))
+            print_and_copy_path(answers_file)
+
+        case "generate_speaking":
+            if token is None:
+                print("<error> not logged in; cannot generate speaking audio")
+                return False
+
+            clips = generate_speaking_audio(token, hw)
+            if clips is None:
+                print("<error> failed to generate speaking audio")
+                return False
+            if not clips:
+                print("<info> no speaking questions in this item")
+                return False
+            for clip in clips:
+                print(f"<info> Q{clip['index']} -> {clip['path']}")
+
+        case "fill_in_speaking":
+            if token is None:
+                print("<error> not logged in; cannot fill in speaking answers")
+                return False
+
+            if hw.status in [
+                HomeworkStatus.NOT_COMPLETED,
+                HomeworkStatus.MAKE_UP,
+            ]:
+                should_start = prompt_for_yn(
+                    session,
+                    "homework not completed or needs makeup; start it now? ",
+                )
+                if should_start:
+                    start_hw(token, hw)
+
+            # never auto-submit here; user reviews and submits manually
+            fill_in_speaking_answers(token, hw, submit=False)
+
+        case "start":
+            if token is None:
+                print("<error> not logged in; cannot start homework")
+                return False
+
+            start_hw(token, hw)
+            return True
+
+        case _:
+            print("<error> argument invalid")
+
+    return False
 
 
 def main():
@@ -130,7 +267,19 @@ def main():
                     print("  audio - download/transcribe audio of a homework item")
                     print("  text - display/download text content of a homework item")
                     print(
-                        "  answers - fill in/download (from paper)/generate/submit answers for a homework item"
+                        "  answers <sub> <spec> - fill in (single index only)/download/download_from_paper/generate/generate_speaking/fill_in_speaking/complete/submit/start"
+                    )
+                    print(
+                        "  <spec> accepts a single index, comma-separated indices, and inclusive ranges, e.g. 0-1,3,5,7-9 (fill_in takes a single index only)"
+                    )
+                    print(
+                        "  answers download|download_from_paper [-h] <spec> - -h names the cache file after the homework title"
+                    )
+                    print(
+                        "  answers complete <spec> - full pipeline for one or more items in order (no submit)"
+                    )
+                    print(
+                        "  answers submit <spec> - submit one or more items in order"
                     )
                     print("  help - show this help message")
                     print("  list - list all homework items")
@@ -219,156 +368,162 @@ def main():
                     if len(input_parts) < 3:
                         print("<error> argument not enough")
                         continue
-                    index = try_parse_int(input_parts[2])
-                    if index is None:
-                        print("<error> argument invalid")
-                        continue
-                    if index < 0 or index >= len(hw_list):
-                        print(f"<error> index out of range: {index}")
-                        continue
 
-                    match input_parts[1]:
-                        case "fill_in":
-                            if token is None:
-                                print("<error> not logged in; cannot fill in answers")
-                                continue
+                    # separate flags (e.g. -h) from the positional index spec.
+                    # -h: for download/download_from_paper, name the cache file after
+                    # the homework title instead of the encoded id.
+                    flags = [p for p in input_parts[2:] if p.startswith("-")]
+                    positional = [p for p in input_parts[2:] if not p.startswith("-")]
+                    use_title = "-h" in flags
+                    if len(positional) == 0:
+                        print("<error> no index provided")
+                        continue
+                    spec = positional[0]
 
-                            hw = hw_list[index]
-                            if hw.status in [
+                    # `complete` accepts a comma-separated list of indices and
+                    # inclusive ranges, run in order (e.g. "0-1,3,5,7-9").
+                    if input_parts[1] == "complete":
+                        if token is None:
+                            print("<error> not logged in; cannot complete homework")
+                            continue
+
+                        indices = parse_index_ranges(spec, len(hw_list))
+                        if indices is None:
+                            print(
+                                f"<error> invalid or out-of-range index spec: {spec!r}"
+                            )
+                            continue
+                        if len(indices) == 0:
+                            print("<error> no index provided")
+                            continue
+
+                        for pos, idx in enumerate(indices):
+                            hw = hw_list[idx]
+                            print(
+                                f"--- ({pos + 1}/{len(indices)}) completing "
+                                f"[{idx}] {hw.title} ---"
+                            )
+                            # questions must be started first; translations submit
+                            # directly without a start call. in full-pipeline
+                            # complete mode we start automatically without asking.
+                            if hw.kind != HomeworkKind.TRANSLATION and hw.status in [
                                 HomeworkStatus.NOT_COMPLETED,
                                 HomeworkStatus.MAKE_UP,
                             ]:
-                                should_start = prompt_for_yn(
-                                    session,
-                                    "homework not completed or needs makeup; start it now? ",
-                                )
-                                if should_start:
-                                    start_hw(token, hw_list[index])
-
-                            answers_input = session.prompt(
-                                "answers file (relative path is ok): "
-                            ).strip()
-                            with open(answers_input, "rt", encoding="utf-8") as f:
-                                answers = json.load(f)
-                            expected_correct_rate_input = session.prompt(
-                                "expected correct rate (0.0-1.0, default 1.0): "
-                            ).strip()
-                            expected_correct_rate = None
-                            if expected_correct_rate_input != "":
-                                try:
-                                    expected_correct_rate = float(
-                                        expected_correct_rate_input
-                                    )
-                                except ValueError:
-                                    print("<error> invalid correct rate input")
-                                    continue
-                                if (
-                                    not (0.0 <= expected_correct_rate <= 1.0)
-                                    or expected_correct_rate is None
-                                ):
-                                    print("<error> correct rate out of range")
-                                    continue
-                            fill_in_answers(
-                                token, hw_list[index], answers, expected_correct_rate
-                            )
-
-                        case "download":
-                            if token is None:
-                                print("<error> not logged in; cannot retrieve answers")
-                                continue
-
-                            answers = get_answers(token, hw_list[index])
-                            if answers is None:
                                 print(
-                                    "<error> no answers retrieved; cannot save to file"
+                                    "<info> homework not completed or needs makeup; starting it"
                                 )
-                                continue
-
-                            answers_file = (
-                                CACHE_DIR
-                                / f"homework_{encodeb64_safe(hw_list[index].title)}_answers.json"
+                                start_hw(token, hw)
+                            # full pipeline; never auto-submit (review + submit manually)
+                            complete_homework(
+                                token, hw, submit=False, ai_client=ai_client
                             )
-                            with open(answers_file, "wt", encoding="utf-8") as f:
-                                f.write(
-                                    json.dumps(answers, indent=4, ensure_ascii=False)
-                                )
-                            print_and_copy_path(answers_file)
+                        continue
 
-                        case "download_from_paper":
-                            if token is None:
-                                print("<error> not logged in; cannot retrieve answers")
-                                continue
+                    # `submit` also accepts a comma-separated list of indices and
+                    # inclusive ranges, submitted in order (e.g. "0-1,3,5,7-9").
+                    if input_parts[1] == "submit":
+                        if token is None:
+                            print("<error> not logged in; cannot submit homework")
+                            continue
 
-                            answers = get_paper_answers(token, hw_list[index])
-                            if answers is None:
-                                print(
-                                    "<error> no answers retrieved; cannot save to file"
-                                )
-                                continue
-
-                            answers_file = (
-                                CACHE_DIR
-                                / f"homework_{encodeb64_safe(hw_list[index].title)}_answers_paper.json"
+                        indices = parse_index_ranges(spec, len(hw_list))
+                        if indices is None:
+                            print(
+                                f"<error> invalid or out-of-range index spec: {spec!r}"
                             )
-                            with open(answers_file, "wt", encoding="utf-8") as f:
-                                f.write(
-                                    json.dumps(answers, indent=4, ensure_ascii=False)
-                                )
-                            print_and_copy_path(answers_file)
+                            continue
+                        if len(indices) == 0:
+                            print("<error> no index provided")
+                            continue
 
-                        case "generate":
-                            if ai_client is None:
-                                print("<error> no ai client selected")
-                                continue
-
-                            if token is None:
-                                print(
-                                    "<warning> not logged in, cannot determine whether hw has audio"
-                                )
-                                has_audio_manual = prompt_for_yn(
-                                    session, "hw has audio? "
-                                )
-                            else:
-                                has_audio_manual = None
-
-                            answers = generate_answers(
-                                token, hw_list[index], ai_client, has_audio_manual
+                        for pos, idx in enumerate(indices):
+                            hw = hw_list[idx]
+                            print(
+                                f"--- ({pos + 1}/{len(indices)}) submitting "
+                                f"[{idx}] {hw.title} ---"
                             )
-                            if answers is None:
-                                print("<error> failed to generate answers")
-                                continue
+                            submit_answers(token, hw)
+                        continue
 
-                            answers_file = (
-                                CACHE_DIR
-                                / f"homework_{encodeb64_safe(hw_list[index].title)}_answers_gen.json"
+                    # `fill_in` is interactive (per-item file + correct rate prompts),
+                    # so it stays single-index only.
+                    if input_parts[1] == "fill_in":
+                        index = try_parse_int(spec)
+                        if index is None or index < 0 or index >= len(hw_list):
+                            print(f"<error> invalid or out-of-range index: {spec!r}")
+                            continue
+
+                        if token is None:
+                            print("<error> not logged in; cannot fill in answers")
+                            continue
+
+                        hw = hw_list[index]
+                        if hw.status in [
+                            HomeworkStatus.NOT_COMPLETED,
+                            HomeworkStatus.MAKE_UP,
+                        ]:
+                            should_start = prompt_for_yn(
+                                session,
+                                "homework not completed or needs makeup; start it now? ",
                             )
-                            with open(answers_file, "wt", encoding="utf-8") as f:
-                                f.write(
-                                    json.dumps(answers, indent=4, ensure_ascii=False)
+                            if should_start:
+                                start_hw(token, hw)
+
+                        answers_input = session.prompt(
+                            "answers file (relative path is ok): "
+                        ).strip()
+                        with open(answers_input, "rt", encoding="utf-8") as f:
+                            answers = json.load(f)
+                        expected_correct_rate_input = session.prompt(
+                            "expected correct rate (0.0-1.0, default 1.0): "
+                        ).strip()
+                        expected_correct_rate = None
+                        if expected_correct_rate_input != "":
+                            try:
+                                expected_correct_rate = float(
+                                    expected_correct_rate_input
                                 )
-                            print_and_copy_path(answers_file)
-
-                        case "submit":
-                            if token is None:
-                                print("<error> not logged in; cannot submit homework")
+                            except ValueError:
+                                print("<error> invalid correct rate input")
                                 continue
-
-                            submit_answers(token, hw_list[index])
-
-                        case "start":
-                            if token is None:
-                                print("<error> not logged in; cannot start homework")
+                            if not (0.0 <= expected_correct_rate <= 1.0):
+                                print("<error> correct rate out of range")
                                 continue
+                        fill_in_answers(token, hw, answers, expected_correct_rate)
+                        continue
 
-                            start_hw(token, hw_list[index])
-                            _hw_list = get_hw_list(token)
-                            if _hw_list is None:
-                                print("<error> failed to retrieve homework list")
-                                continue
+                    # remaining index-based subcommands accept the advanced spec
+                    # (comma-separated indices and inclusive ranges, e.g. "0-1,3,5-9")
+                    indices = parse_index_ranges(spec, len(hw_list))
+                    if indices is None:
+                        print(
+                            f"<error> invalid or out-of-range index spec: {spec!r}"
+                        )
+                        continue
+                    if len(indices) == 0:
+                        print("<error> no index provided")
+                        continue
+
+                    needs_refresh = False
+                    for pos, idx in enumerate(indices):
+                        hw = hw_list[idx]
+                        if len(indices) > 1:
+                            print(
+                                f"--- ({pos + 1}/{len(indices)}) {input_parts[1]} "
+                                f"[{idx}] {hw.title} ---"
+                            )
+                        if _run_answers_item(
+                            input_parts[1], hw, token, ai_client, session, use_title
+                        ):
+                            needs_refresh = True
+
+                    if needs_refresh and token is not None:
+                        _hw_list = get_hw_list(token)
+                        if _hw_list is None:
+                            print("<error> failed to retrieve homework list")
+                        else:
                             hw_list = _hw_list
-
-                        case _:
-                            print("<error> argument invalid")
 
                 case "account":
                     if len(input_parts) < 2:
@@ -390,7 +545,7 @@ def main():
                                         )
                                     ),
                                 )
-                            )  # type: ignore
+                            )
                             default = 0
                             if isinstance(
                                 globalvars.context.config.credentials.selected, int
@@ -434,7 +589,7 @@ def main():
                                             globalvars.context.config.credentials.all,
                                         )
                                     ),
-                                )  # type: ignore
+                                )
                             )
                             default = "none"
                             if isinstance(
@@ -481,7 +636,7 @@ def main():
                                             globalvars.context.config.ai_client.all,
                                         )
                                     ),
-                                )  # type: ignore
+                                )
                             )
                             default = "none"
                             if isinstance(

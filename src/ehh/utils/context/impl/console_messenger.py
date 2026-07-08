@@ -69,4 +69,4 @@ class ConsoleMessenger(Messenger):
             func(progress, *args, **kwargs)
 
     def send_exception(self, _: Exception) -> None:
-        self.rich_console.print_exception(show_locals=True)  # type: ignore
+        self.rich_console.print_exception(show_locals=True)

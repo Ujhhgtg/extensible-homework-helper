@@ -19,7 +19,7 @@ def load_config(path: str | Path = CONFIG_FILE) -> Munch:
         )
 
     with open(path, "rt", encoding="utf-8") as f:
-        return munchify(yaml.load(f, Loader=yaml.FullLoader))  # type: ignore
+        return munchify(yaml.load(f, Loader=yaml.FullLoader))
 
 
 def save_config(config: Munch, path: str | Path = CONFIG_FILE) -> None:

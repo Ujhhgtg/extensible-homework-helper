@@ -23,11 +23,13 @@ dependencies = [
     "rich>=14",
     "beautifulsoup4",
     "pyperclip",
+    "edge-tts>=7.2.8",
 ]
 
 [project.optional-dependencies]
 tg-bot = ["python-telegram-bot"]
 transcription = ["openai-whisper", "torch", "torchvision"]
+tts = ["edge-tts"]
 
 [project.scripts]
 ehh-repl = "ehh:repl"
