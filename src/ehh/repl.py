@@ -8,6 +8,7 @@ import shlex
 from typing import Optional
 
 import httpx
+from munch import munchify
 from prompt_toolkit import PromptSession
 from prompt_toolkit.shortcuts import choice
 from rich import traceback
@@ -180,6 +181,76 @@ def _run_answers_item(
     return False
 
 
+def _run_setup_wizard(session: PromptSession) -> None:
+    """Interactive first-run setup: collect credentials (and optionally an AI
+    client) then write a new config file to the default location."""
+    print("--- step: setup ---")
+    print("<info> no config file found; starting first-run setup")
+    print("<info> press Ctrl+C to abort")
+
+    # credentials (required)
+    print("--- credentials ---")
+    while True:
+        school = session.prompt("school code: ").strip()
+        if school:
+            break
+        print("<error> school code cannot be empty")
+    while True:
+        username = session.prompt("username: ").strip()
+        if username:
+            break
+        print("<error> username cannot be empty")
+    while True:
+        password = session.prompt("password: ").strip()
+        if password:
+            break
+        print("<error> password cannot be empty")
+
+    config_dict: dict = {
+        "credentials": {
+            "all": [{"school": school, "username": username, "password": password}],
+            "selected": 0,
+        },
+        "ai_client": {
+            "all": [],
+            "selected": None,
+        },
+        "telegram_bot_token": "",
+        "whisper": {"device": "auto", "in_memory": False, "model": "large"},
+    }
+
+    # AI client (optional)
+    if prompt_for_yn(session, "configure an AI client now? "):
+        print("--- AI client ---")
+        while True:
+            api_url = session.prompt("API base URL: ").strip()
+            if api_url:
+                break
+            print("<error> API base URL cannot be empty")
+        while True:
+            api_key = session.prompt("API key: ").strip()
+            if api_key:
+                break
+            print("<error> API key cannot be empty")
+        while True:
+            model_name = session.prompt("model name: ").strip()
+            if model_name:
+                break
+            print("<error> model name cannot be empty")
+        config_dict["ai_client"]["all"].append(
+            {
+                "kind": "openai",
+                "api_url": api_url,
+                "api_key": api_key,
+                "model": {"all": [model_name], "selected": 0},
+            }
+        )
+        config_dict["ai_client"]["selected"] = 0
+
+    save_config(munchify(config_dict))
+    print("<info> config saved; continuing startup")
+
+
 def main():
     globalvars.context = APIContext(
         messenger=ConsoleMessenger(), http_client=httpx.Client(base_url=BASE_URL)
@@ -192,14 +263,18 @@ def main():
     print("--- step: initialize ---")
     traceback.install()
     print("<info> rich traceback installed")
+    session: PromptSession = PromptSession()
     migrate_config_if_needed()
-    globalvars.context.config = load_config()
+    try:
+        globalvars.context.config = load_config()
+    except FileNotFoundError:
+        _run_setup_wizard(session)
+        globalvars.context.config = load_config()
     print("<info> loaded config file")
     patch_whisper_transcribe_progress()
     print("<info> patched whisper.transcribe to use rich console")
 
     hw_list: list[HomeworkRecord] = []
-    session: PromptSession = PromptSession()
     ai_client: Optional[AIClient] = None
     token: Optional[Token] = None
 
@@ -283,6 +358,7 @@ def main():
                     )
                     print("  help - show this help message")
                     print("  list - list all homework items")
+                    print("  account add - add a new account to the config")
                     print("  account - login/logout/select default account")
                     print("  ai - select AI client & model")
                     print("  config - reload/save configuration")
@@ -397,6 +473,28 @@ def main():
                             print("<error> no index provided")
                             continue
 
+                        expected_correctness_input = session.prompt(
+                            "correct count (e.g. 8), wrong count (e.g. -2), or rate (e.g. 0.8) [default: all correct]: "
+                        ).strip()
+                        expected_correctness: float | int | None = None
+                        if expected_correctness_input != "":
+                            if "." in expected_correctness_input:
+                                try:
+                                    rate = float(expected_correctness_input)
+                                except ValueError:
+                                    print("<error> invalid rate input")
+                                    continue
+                                if not (0.0 <= rate <= 1.0):
+                                    print("<error> rate out of range (must be 0.0–1.0)")
+                                    continue
+                                expected_correctness = rate
+                            else:
+                                try:
+                                    expected_correctness = int(expected_correctness_input)
+                                except ValueError:
+                                    print("<error> invalid count input")
+                                    continue
+
                         for pos, idx in enumerate(indices):
                             hw = hw_list[idx]
                             print(
@@ -416,7 +514,8 @@ def main():
                                 start_hw(token, hw)
                             # full pipeline; never auto-submit (review + submit manually)
                             complete_homework(
-                                token, hw, submit=False, ai_client=ai_client
+                                token, hw, submit=False, ai_client=ai_client,
+                                expected_correctness=expected_correctness,
                             )
                         continue
 
@@ -475,22 +574,28 @@ def main():
                         ).strip()
                         with open(answers_input, "rt", encoding="utf-8") as f:
                             answers = json.load(f)
-                        expected_correct_rate_input = session.prompt(
-                            "expected correct rate (0.0-1.0, default 1.0): "
+                        expected_correctness_input = session.prompt(
+                            "correct count (e.g. 8), wrong count (e.g. -2), or rate (e.g. 0.8) [default: all correct]: "
                         ).strip()
-                        expected_correct_rate = None
-                        if expected_correct_rate_input != "":
-                            try:
-                                expected_correct_rate = float(
-                                    expected_correct_rate_input
-                                )
-                            except ValueError:
-                                print("<error> invalid correct rate input")
-                                continue
-                            if not (0.0 <= expected_correct_rate <= 1.0):
-                                print("<error> correct rate out of range")
-                                continue
-                        fill_in_answers(token, hw, answers, expected_correct_rate)
+                        expected_correctness: float | int | None = None
+                        if expected_correctness_input != "":
+                            if "." in expected_correctness_input:
+                                try:
+                                    rate = float(expected_correctness_input)
+                                except ValueError:
+                                    print("<error> invalid rate input")
+                                    continue
+                                if not (0.0 <= rate <= 1.0):
+                                    print("<error> rate out of range (must be 0.0–1.0)")
+                                    continue
+                                expected_correctness = rate
+                            else:
+                                try:
+                                    expected_correctness = int(expected_correctness_input)
+                                except ValueError:
+                                    print("<error> invalid count input")
+                                    continue
+                        fill_in_answers(token, hw, answers, expected_correctness)
                         continue
 
                     # remaining index-based subcommands accept the advanced spec
@@ -571,6 +676,38 @@ def main():
                             print(
                                 f"<success> logged in with credentials: {cred.describe()}"
                             )
+                        case "add":
+                            while True:
+                                new_school = session.prompt("school code: ").strip()
+                                if new_school:
+                                    break
+                                print("<error> school code cannot be empty")
+                            while True:
+                                new_username = session.prompt("username: ").strip()
+                                if new_username:
+                                    break
+                                print("<error> username cannot be empty")
+                            while True:
+                                new_password = session.prompt("password: ").strip()
+                                if new_password:
+                                    break
+                                print("<error> password cannot be empty")
+                            from munch import munchify as _munchify
+                            globalvars.context.config.credentials.all.append(
+                                _munchify(
+                                    {
+                                        "school": new_school,
+                                        "username": new_username,
+                                        "password": new_password,
+                                    }
+                                )
+                            )
+                            new_cred = Credentials(new_school, new_username, new_password)
+                            print(
+                                f"<success> added account: {new_cred.describe()} "
+                                f"(index {len(globalvars.context.config.credentials.all) - 1})"
+                            )
+
                         case "logout":
                             token = None
                             print("<success> logged out")

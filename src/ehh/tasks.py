@@ -543,6 +543,7 @@ def complete_homework(
     record: HomeworkRecord,
     submit: bool = False,
     ai_client: Optional[AIClient] = None,
+    expected_correctness: Optional[float | int] = None,
 ) -> Optional[list[dict]]:
     """Full pipeline for a homework item, handling any question type.
 
@@ -576,6 +577,55 @@ def complete_homework(
     if paper_answers is None:
         print("<error> failed to get paper answers")
         return None
+
+    if expected_correctness is not None:
+        total_questions = len(paper_answers)
+        total_choices = sum(1 for a in paper_answers if _is_flippable_choice(a))
+        if isinstance(expected_correctness, float):
+            expected_wrong_questions = int(total_questions * (1.0 - expected_correctness))
+        elif expected_correctness >= 0:
+            # positive int: count of correct questions
+            if expected_correctness > total_questions:
+                print(
+                    f"<error> correct count ({expected_correctness}) exceeds total questions ({total_questions})"
+                )
+                return None
+            expected_wrong_questions = total_questions - expected_correctness
+        else:
+            # negative int: absolute value is count of wrong questions
+            expected_wrong_questions = -expected_correctness
+        if total_choices < expected_wrong_questions:
+            print(
+                f"<error> not enough choices ({total_choices}) to be wrong ({expected_wrong_questions})"
+            )
+            return None
+
+        if expected_wrong_questions > 0:
+            print(
+                f"<info> questions: {total_questions}; choices: {total_choices}; expected wrong questions/choices: {expected_wrong_questions}"
+            )
+            print(
+                f"<info> adjusting {expected_wrong_questions} answer(s) to be wrong..."
+            )
+            wrong_answer_indices = sorted(
+                random.sample(
+                    [i for i, a in enumerate(paper_answers) if _is_flippable_choice(a)],
+                    expected_wrong_questions,
+                )
+            )
+            print(
+                f"<info> selected question indices for wrong answers: {wrong_answer_indices}"
+            )
+            for i in wrong_answer_indices:
+                a = paper_answers[i]
+                original_answer = a["content"].upper() if isinstance(a["content"], str) else str(a["content"]).upper()
+                wrong_option = random.choice(
+                    [opt for opt in ["A", "B", "C", "D"] if opt != original_answer]
+                )
+                paper_answers[i]["content"] = wrong_option
+                print(
+                    f"<info> changed answer for question {a['index']} from '{original_answer}' to '{wrong_option}' to reduce correctness rate"
+                )
 
     attachment_by_tag = _upload_speaking_clips(token, record)
     if attachment_by_tag is None:
@@ -1113,7 +1163,7 @@ def fill_in_answers(
     token: Token,
     record: HomeworkRecord,
     answers: list[dict],
-    expected_correct_rate: Optional[float] = None,
+    expected_correctness: Optional[float | int] = None,
 ) -> None:
     print(f"--- step: fill in answers for '{record.title}' ---")
 
@@ -1138,10 +1188,22 @@ def fill_in_answers(
         )
         return
 
-    if expected_correct_rate is not None:
+    if expected_correctness is not None:
         total_questions = len(questions)
-        total_choices = sum(1 for a in answers if a["kind"] == "choice")
-        expected_wrong_questions = int(total_questions * (1.0 - expected_correct_rate))
+        total_choices = sum(1 for a in answers if _is_flippable_choice(a))
+        if isinstance(expected_correctness, float):
+            expected_wrong_questions = int(total_questions * (1.0 - expected_correctness))
+        elif expected_correctness >= 0:
+            # positive int: count of correct questions
+            if expected_correctness > total_questions:
+                print(
+                    f"<error> correct count ({expected_correctness}) exceeds total questions ({total_questions})"
+                )
+                return
+            expected_wrong_questions = total_questions - expected_correctness
+        else:
+            # negative int: absolute value is count of wrong questions
+            expected_wrong_questions = -expected_correctness
         if total_choices < expected_wrong_questions:
             print(
                 f"<error> not enough choices ({total_choices}) to be wrong ({expected_wrong_questions})"
@@ -1153,11 +1215,11 @@ def fill_in_answers(
                 f"<info> questions: {total_questions}; choices: {total_choices}; expected wrong questions/choices: {expected_wrong_questions}"
             )
             print(
-                f"<info> adjusting answers to achieve expected correctness rate of {expected_correct_rate * 100:.2f}%..."
+                f"<info> adjusting {expected_wrong_questions} answer(s) to be wrong..."
             )
             wrong_answer_indices = sorted(
                 random.sample(
-                    [i for i, a in enumerate(answers) if a["kind"] == "choice"],
+                    [i for i, a in enumerate(answers) if _is_flippable_choice(a)],
                     expected_wrong_questions,
                 )
             )
@@ -1167,7 +1229,7 @@ def fill_in_answers(
             for i in wrong_answer_indices:
                 q = questions[i]
                 a = answers[i]
-                if a["kind"] == "choice" and expected_wrong_questions > 0:
+                if _is_flippable_choice(a):
                     original_answer = a["content"].upper()
                     wrong_option = random.choice(
                         [opt for opt in ["A", "B", "C", "D"] if opt != original_answer]
@@ -1217,6 +1279,21 @@ def _get_answer_kind(id: str):
     if id and id[0].isdigit():
         return "speaking"
     return "unknown"
+
+
+def _is_flippable_choice(a: dict) -> bool:
+    """Return True only for single A/B/C/D radio choices that can be safely
+    replaced with a different option to introduce a deliberate wrong answer.
+
+    Compound answers like 'B#B#C#B#B' (multiple sub-choices joined by '#',
+    as seen in 听说训练 assignments) share the 'choice' kind but must not be
+    flipped — replacing them with a single letter would corrupt the answer."""
+    return (
+        a["kind"] == "choice"
+        and isinstance(a["content"], str)
+        and len(a["content"]) == 1
+        and "A" <= a["content"].upper() <= "D"
+    )
 
 
 def _normalize_answer_content(kind: str, content):

@@ -22,7 +22,7 @@ COMPLETION_WORD_MAP = {
         "download_from_paper",
         "submit",
     ],
-    ("account",): ["login", "logout", "select_default"],
+    ("account",): ["login", "logout", "select_default", "add"],
     ("ai",): ["select_api", "select_model"],
     ("config",): ["reload", "save"],
 }
