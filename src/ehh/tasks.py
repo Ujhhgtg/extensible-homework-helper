@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import anthropic
 import json5
 import openai
 from bs4 import BeautifulSoup
@@ -786,26 +787,13 @@ def generate_translation_answers(
     print(f"<info> current AI client: {client.describe()}")
     print("<info> requesting model for translations (this may take a while)...")
     try:
-        response = client.client.chat.completions.create(
-            model=client.selected_model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "You are a professional English teacher and translator.",
-                        }
-                    ],
-                },
-                {"role": "user", "content": [{"type": "text", "text": prompt}]},
-            ],
+        raw_data = client.generate(
+            "You are a professional English teacher and translator.", prompt
         )
-    except openai.APIError as e:
+    except (openai.APIError, anthropic.APIError) as e:
         print(f"<error> api returned error: {e}")
         return None
 
-    raw_data = response.choices[0].message.content
     if raw_data is None:
         print("<error> model returned null")
         return None
@@ -1083,26 +1071,11 @@ def generate_answers(
     print(f"<info> current AI client: {client.describe()}")
     print("<info> requesting model for a response (this may take a while)...")
     try:
-        response = client.client.chat.completions.create(
-            model=client.selected_model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "You are a professional English teacher.",
-                        }
-                    ],
-                },
-                {"role": "user", "content": [{"type": "text", "text": prompt}]},
-            ],
-        )
-    except openai.APIError as e:
+        raw_data = client.generate("You are a professional English teacher.", prompt)
+    except (openai.APIError, anthropic.APIError) as e:
         print(f"<error> api returned error: {e}")
         return None
 
-    raw_data = response.choices[0].message.content
     if raw_data is None:
         print("<error> model returned null")
         return None

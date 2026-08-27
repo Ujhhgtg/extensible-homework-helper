@@ -2,7 +2,7 @@ ai_client:
   all:
     - api_key: ollama
       api_url: http://localhost:11434/v1/
-      kind: openai
+      kind: openai-chat-completions
       model:
         all:
           - qwen3:30b

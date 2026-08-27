@@ -19,7 +19,24 @@ def load_config(path: str | Path = CONFIG_FILE) -> Munch:
         )
 
     with open(path, "rt", encoding="utf-8") as f:
-        return munchify(yaml.load(f, Loader=yaml.FullLoader))
+        config = munchify(yaml.load(f, Loader=yaml.FullLoader))
+
+    if _migrate_ai_client_kinds(config):
+        save_config(config, path)
+        print("<info> migrated ai_client 'kind' fields to new naming scheme")
+
+    return config
+
+
+def _migrate_ai_client_kinds(config: Munch) -> bool:
+    """Rename the old bare 'openai' ai_client kind to 'openai-chat-completions'."""
+    migrated = False
+    for entry in config.get("ai_client", {}).get("all", []):
+        if entry.get("kind") == "openai":
+            entry["kind"] = "openai-chat-completions"
+            migrated = True
+    return migrated
+
 
 
 def save_config(config: Munch, path: str | Path = CONFIG_FILE) -> None:

@@ -3,6 +3,7 @@
 
 
 import json
+import random
 import re
 import shlex
 from typing import Optional
@@ -47,6 +48,66 @@ from .utils.crypto import encodeb64_safe
 from .utils.fs import CACHE_DIR
 from .utils.logging import patch_whisper_transcribe_progress, print, print_and_copy_path
 from .utils.prompt import ReplCompleter, prompt_for_yn
+
+
+def _parse_correctness_input(raw: str) -> tuple[float | int | None, str | None]:
+    """Parse a correctness spec entered by the user. Returns (value, error).
+
+    Accepted formats:
+      <empty>           → all correct (no adjustment)
+      0.8               → rate (float 0.0–1.0)
+      8                 → correct count (positive int)
+      -2                → wrong count (negative int)
+      rand(1,5)         → random int in [1, 5]  — both positive
+      rand(-5,-1)       → random int in [-5, -1] — both negative
+      rand(0.5,0.9)     → random float in [0.5, 0.9]
+
+    start and end must be the same kind: both positive ints, both negative ints,
+    or both floats. Mixing kinds (e.g. rand(-2, 0.8) or rand(-1, 3)) is an error.
+    If start > end the range is automatically swapped.
+    """
+    if not raw:
+        return None, None
+
+    m = re.fullmatch(r"rand\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)", raw)
+    if m:
+        a_raw, b_raw = m.group(1), m.group(2)
+        a_is_float = "." in a_raw
+        b_is_float = "." in b_raw
+        if a_is_float != b_is_float:
+            return None, "rand() start and end must both be floats or both be integers"
+        if a_is_float:
+            try:
+                a, b = float(a_raw), float(b_raw)
+            except ValueError:
+                return None, "invalid float in rand()"
+            if a > b:
+                a, b = b, a
+            return random.uniform(a, b), None
+        else:
+            try:
+                a, b = int(a_raw), int(b_raw)
+            except ValueError:
+                return None, "invalid integer in rand()"
+            if (a >= 0) != (b >= 0):
+                return None, "rand() integer bounds must both be positive or both be negative"
+            if a > b:
+                a, b = b, a
+            return random.randint(a, b), None
+
+    if "." in raw:
+        try:
+            rate = float(raw)
+        except ValueError:
+            return None, "invalid rate input"
+        if not (0.0 <= rate <= 1.0):
+            return None, "rate out of range (must be 0.0–1.0)"
+        return rate, None
+
+    try:
+        return int(raw), None
+    except ValueError:
+        return None, "invalid count input"
 
 
 def _filename_stem(hw: HomeworkRecord, use_title: bool) -> str:
@@ -222,6 +283,15 @@ def _run_setup_wizard(session: PromptSession) -> None:
     # AI client (optional)
     if prompt_for_yn(session, "configure an AI client now? "):
         print("--- AI client ---")
+        client_kind = choice(
+            "select AI client kind:",
+            options=[
+                ("openai-chat-completions", "OpenAI-compatible /chat/completions"),
+                ("openai-responses", "OpenAI-compatible /responses"),
+                ("anthropic-messages", "Anthropic /messages"),
+            ],
+            default="openai-chat-completions",
+        )
         while True:
             api_url = session.prompt("API base URL: ").strip()
             if api_url:
@@ -239,7 +309,7 @@ def _run_setup_wizard(session: PromptSession) -> None:
             print("<error> model name cannot be empty")
         config_dict["ai_client"]["all"].append(
             {
-                "kind": "openai",
+                "kind": client_kind,
                 "api_url": api_url,
                 "api_key": api_key,
                 "model": {"all": [model_name], "selected": 0},
@@ -474,26 +544,13 @@ def main():
                             continue
 
                         expected_correctness_input = session.prompt(
-                            "correct count (e.g. 8), wrong count (e.g. -2), or rate (e.g. 0.8) [default: all correct]: "
+                            "correct count (e.g. 8), wrong count (e.g. -2), rate (e.g. 0.8), or rand range (e.g. rand(1,5)) [default: all correct]: "
                         ).strip()
-                        expected_correctness: float | int | None = None
-                        if expected_correctness_input != "":
-                            if "." in expected_correctness_input:
-                                try:
-                                    rate = float(expected_correctness_input)
-                                except ValueError:
-                                    print("<error> invalid rate input")
-                                    continue
-                                if not (0.0 <= rate <= 1.0):
-                                    print("<error> rate out of range (must be 0.0–1.0)")
-                                    continue
-                                expected_correctness = rate
-                            else:
-                                try:
-                                    expected_correctness = int(expected_correctness_input)
-                                except ValueError:
-                                    print("<error> invalid count input")
-                                    continue
+                        # validate once up front so syntax errors are caught before the loop
+                        _, err = _parse_correctness_input(expected_correctness_input)
+                        if err is not None:
+                            print(f"<error> {err}")
+                            continue
 
                         for pos, idx in enumerate(indices):
                             hw = hw_list[idx]
@@ -501,6 +558,9 @@ def main():
                                 f"--- ({pos + 1}/{len(indices)}) completing "
                                 f"[{idx}] {hw.title} ---"
                             )
+                            # re-evaluate per assignment so rand() produces a fresh
+                            # value for each item rather than reusing one draw
+                            expected_correctness, _ = _parse_correctness_input(expected_correctness_input)
                             # questions must be started first; translations submit
                             # directly without a start call. in full-pipeline
                             # complete mode we start automatically without asking.
@@ -575,26 +635,12 @@ def main():
                         with open(answers_input, "rt", encoding="utf-8") as f:
                             answers = json.load(f)
                         expected_correctness_input = session.prompt(
-                            "correct count (e.g. 8), wrong count (e.g. -2), or rate (e.g. 0.8) [default: all correct]: "
+                            "correct count (e.g. 8), wrong count (e.g. -2), rate (e.g. 0.8), or rand range (e.g. rand(1,5)) [default: all correct]: "
                         ).strip()
-                        expected_correctness: float | int | None = None
-                        if expected_correctness_input != "":
-                            if "." in expected_correctness_input:
-                                try:
-                                    rate = float(expected_correctness_input)
-                                except ValueError:
-                                    print("<error> invalid rate input")
-                                    continue
-                                if not (0.0 <= rate <= 1.0):
-                                    print("<error> rate out of range (must be 0.0–1.0)")
-                                    continue
-                                expected_correctness = rate
-                            else:
-                                try:
-                                    expected_correctness = int(expected_correctness_input)
-                                except ValueError:
-                                    print("<error> invalid count input")
-                                    continue
+                        expected_correctness, err = _parse_correctness_input(expected_correctness_input)
+                        if err is not None:
+                            print(f"<error> {err}")
+                            continue
                         fill_in_answers(token, hw, answers, expected_correctness)
                         continue
 
