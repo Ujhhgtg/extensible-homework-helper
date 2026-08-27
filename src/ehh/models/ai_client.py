@@ -45,8 +45,10 @@ class AIClient:
                 max_retries=_MAX_RETRIES,
             )
         elif kind == "anthropic-messages":
+            # most Anthropic-compatible proxies (incl. PackyCode) expect a
+            # bearer token rather than the x-api-key header api_key= sends.
             self.client = anthropic.Anthropic(
-                api_key=self.api_key,
+                auth_token=self.api_key,
                 base_url=self.api_url,
                 timeout=_REQUEST_TIMEOUT,
                 max_retries=_MAX_RETRIES,
